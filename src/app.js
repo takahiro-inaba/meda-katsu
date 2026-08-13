@@ -29,6 +29,43 @@
    * 一生は同じなので、種別を持つ一つの表で扱う。
    * 量は「3株」「20L」「1台」と単位がばらばらなので自由入力にする。
    */
+  /*
+   * 測定時刻。水温は朝と昼で数℃違うため、時刻を持たないと
+   * 「水温が変わった」のか「測る時間が違った」のか区別できない。
+   * 時刻のない古い記録は「不明」のまま扱い、後から作らない。
+   */
+  var TIME_BANDS = [
+    { key: "朝", from: 4, to: 10, label: "朝（4〜10時）" },
+    { key: "昼", from: 10, to: 16, label: "昼（10〜16時）" },
+    { key: "夕夜", from: 16, to: 4, label: "夕・夜（16〜4時）" }
+  ];
+
+  function bandOf(time) {
+    if (!time) return null;
+    var hour = Number(String(time).split(":")[0]);
+    if (isNaN(hour)) return null;
+    if (hour >= 4 && hour < 10) return "朝";
+    if (hour >= 10 && hour < 16) return "昼";
+    return "夕夜";
+  }
+
+  function nowTime() {
+    var d = new Date();
+    return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  }
+
+  /** 時刻まで含めた並び順・グラフの横位置に使う。時刻不明は正午として置く */
+  function stampOf(row) {
+    var base = parseDate(row.date).getTime();
+    var time = row.time || "12:00";
+    var parts = String(time).split(":");
+    return base + (Number(parts[0]) || 0) * 3600000 + (Number(parts[1]) || 0) * 60000;
+  }
+
+  function fmtTime(row) {
+    return row.time ? row.time : "時刻不明";
+  }
+
   var GEAR_CATEGORIES = [
     { key: "水草", note: "植えたもの。増えたり枯れたりする。", placeholder: "アナカリス", amount: "3株" },
     { key: "底床", note: "敷いたもの。何年かで交換する。", placeholder: "赤玉土（中粒）", amount: "20L" },
@@ -53,7 +90,7 @@
   function emptyState() {
     var id = uid();
     return {
-      version: 4,
+      version: 5,
       activeBiotopeId: id,
       biotopes: [{ id: id, name: "メインのビオトープ", startedAt: today(), note: "" }],
       creatures: [],
@@ -65,7 +102,10 @@
     };
   }
 
+  var didMigrate = false;
+
   function migrate(data) {
+    if (data.version < 5) didMigrate = true;
     /* v1 は数を直接持っていたので、その数を「導入」の出来事に読み替える */
     if (data.version < 2) {
       data.creatures.forEach(function (c) {
@@ -77,7 +117,11 @@
         delete c.count;
       });
     }
-    data.version = 4;
+    /* v4 までの測定は時刻を持たない。作らずに「不明」のままにする */
+    if (data.version < 5) {
+      data.measurements.forEach(function (m) { if (m.time === undefined) m.time = null; });
+    }
+    data.version = 5;
     return data;
   }
 
@@ -179,9 +223,11 @@
   var ui = {
     view: "dashboard", range: 90, logType: "餌やり",
     eventCreatureId: null, eventKind: "繁殖", photoId: null,
-    gearCategory: "水草", showRemoved: false
+    gearCategory: "水草", showRemoved: false, band: "all"
   };
   var undoSnapshot = null;
+
+  if (didMigrate) save();
 
   /* --- 日付・数値 --------------------------------------------------------- */
 
@@ -245,7 +291,15 @@
   function byDateDesc(a, b) { return a.date < b.date ? 1 : a.date > b.date ? -1 : 0; }
   function byDateAsc(a, b) { return a.date > b.date ? 1 : a.date < b.date ? -1 : 0; }
 
-  function measurements() { return mine(state.measurements).slice().sort(byDateAsc); }
+  function measurements() {
+    return mine(state.measurements).slice().sort(function (a, b) { return stampOf(a) - stampOf(b); });
+  }
+
+  /** 選ばれた時間帯だけに絞る。時刻不明は「すべて」のときだけ含める */
+  function inBand(rows) {
+    if (ui.band === "all") return rows;
+    return rows.filter(function (r) { return bandOf(r.time) === ui.band; });
+  }
   function logs() { return mine(state.logs).slice().sort(byDateDesc); }
   function creatures() { return mine(state.creatures); }
 
@@ -258,7 +312,7 @@
   function seriesOf(rows, key) {
     return rows
       .filter(function (r) { return r[key] !== null && r[key] !== undefined && r[key] !== ""; })
-      .map(function (r) { return { t: parseDate(r.date).getTime(), v: Number(r[key]), date: r.date }; });
+      .map(function (r) { return { t: stampOf(r), v: Number(r[key]), date: r.date, time: r.time }; });
   }
 
   function eventsOf(creatureId) {
@@ -472,7 +526,7 @@
     svg.push("</svg>");
 
     var payload = points.map(function (p) {
-      return { x: px(p), y: py(p), v: p.v, date: p.date };
+      return { x: px(p), y: py(p), v: p.v, date: p.date, time: p.time || null };
     });
 
     return (
@@ -510,7 +564,8 @@
         crosshair.setAttribute("x2", best.x);
         crosshair.style.display = "";
         tip.innerHTML =
-          '<div class="tooltip-date">' + esc(fmtLong(best.date)) + "</div>" +
+          '<div class="tooltip-date">' + esc(fmtLong(best.date)) +
+          (best.time ? " " + esc(best.time) : "") + "</div>" +
           "<strong>" + num(best.v, cfg.decimals) + esc(cfg.unit) + "</strong>";
         tip.style.display = "";
         tip.style.left = (best.x / VW) * rect.width + "px";
@@ -535,6 +590,46 @@
     return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="6" r="5.5"/></svg>';
   }
 
+  function bandChips() {
+    var options = [["all", "すべての時間"]].concat(TIME_BANDS.map(function (b) { return [b.key, b.key]; }));
+    return (
+      '<div class="chips" role="group" aria-label="測定した時間帯">' +
+      options.map(function (o) {
+        return '<button class="chip" data-action="band" data-band="' + o[0] + '" aria-pressed="' + (ui.band === o[0]) + '">' + esc(o[1]) + "</button>";
+      }).join("") +
+      "</div>"
+    );
+  }
+
+  /** 時間帯ごとの平均。朝と昼で何℃違うのかを直接見せる */
+  function bandStatsHTML(rows) {
+    var groups = TIME_BANDS.map(function (b) {
+      var hit = rows.filter(function (r) { return bandOf(r.time) === b.key; });
+      return { label: b.label, rows: hit };
+    });
+    var unknown = rows.filter(function (r) { return !bandOf(r.time); });
+    if (unknown.length) groups.push({ label: "時刻の記録なし", rows: unknown });
+
+    var shown = groups.filter(function (g) { return g.rows.length > 0; });
+    if (shown.length === 0) return "";
+
+    return (
+      '<div class="tiles">' +
+      shown.map(function (g) {
+        var stats = statsOf(g.rows, "temp");
+        return (
+          '<div class="card tile">' +
+          '<div class="tile-label">' + esc(g.label) + "</div>" +
+          '<div class="tile-value">' + (stats ? num(stats.avg) + '<small>℃</small>' : '<span class="muted">—</span>') + "</div>" +
+          '<div class="tile-meta">' + g.rows.length + "回" +
+          (stats ? " ・ " + num(stats.min) + "〜" + num(stats.max) + "℃" : "") + "</div>" +
+          "</div>"
+        );
+      }).join("") +
+      "</div>"
+    );
+  }
+
   function rangeChips() {
     return (
       '<div class="chips" role="group" aria-label="表示期間">' +
@@ -550,7 +645,7 @@
   function dashboardView() {
     var rows = measurements();
     var latest = rows[rows.length - 1];
-    var temps = inRange(rows);
+    var temps = inBand(inRange(rows));
     var waterChange = lastLogOf("水換え");
     var species = {};
     creatures().forEach(function (c) { species[c.species] = true; });
@@ -558,7 +653,9 @@
 
     var hero = latest && latest.temp !== "" && latest.temp !== null && latest.temp !== undefined
       ? '<div><div class="hero-label">最新の水温</div><div class="hero-value">' + num(latest.temp) + '<span class="hero-unit">℃</span></div></div>' +
-        '<div class="hero-meta">' + esc(fmtLong(latest.date)) + "（" + esc(relative(latest.date)) + "）に測定" +
+        '<div class="hero-meta">' + esc(fmtLong(latest.date)) +
+        (latest.time ? " " + esc(latest.time) + (bandOf(latest.time) ? "（" + esc(bandOf(latest.time)) + "）" : "") : "") +
+        " ・ " + esc(relative(latest.date)) + "に測定" +
         (latest.ph ? " ・ pH " + num(latest.ph, 1) : "") + "</div>"
       : '<div><div class="hero-label">最新の水温</div><div class="hero-value muted">—</div></div>' +
         '<div class="hero-meta">まだ測定がありません。「水質」から記録できます。</div>';
@@ -567,7 +664,8 @@
       '<div class="page-head"><div>' +
       '<h1 class="page-title">' + esc(activeBiotope().name) + "</h1>" +
       '<p class="page-note">' + (activeBiotope().startedAt ? "立ち上げ " + esc(fmtLong(activeBiotope().startedAt)) + "・" + daysSince(activeBiotope().startedAt) + "日目" : "ビオトープの様子") + "</p>" +
-      "</div>" + rangeChips() + "</div>" +
+      "</div>" +
+      '<div class="row" style="gap:8px">' + bandChips() + rangeChips() + "</div></div>" +
 
       '<div class="card"><div class="hero">' + hero + "</div></div>" +
 
@@ -584,7 +682,9 @@
       "</div>" +
 
       '<div class="card">' +
-      '<div class="card-head"><span class="card-title">水温の推移（℃）</span><span class="muted">' + (ui.range === "all" ? "全期間" : "直近" + ui.range + "日") + "</span></div>" +
+      '<div class="card-head"><span class="card-title">水温の推移（℃）</span><span class="muted">' +
+      (ui.band === "all" ? "すべての時間" : ui.band + "だけ") + " ・ " +
+      (ui.range === "all" ? "全期間" : "直近" + ui.range + "日") + "</span></div>" +
       '<div class="card-body">' + lineChartHTML(seriesOf(temps, "temp"), "var(--series-1)", "℃", 1) + "</div>" +
       "</div>" +
 
@@ -775,7 +875,16 @@
     var temps = ms.filter(function (m) { return m.temp !== null && m.temp !== undefined && m.temp !== ""; });
     var phs = ms.filter(function (m) { return m.ph !== null && m.ph !== undefined && m.ph !== ""; });
     var lastTemp = temps[temps.length - 1];
-    var prevTemp = temps[temps.length - 2];
+    /*
+     * 直前の測定ではなく「同じ時間帯の直前の測定」と比べる。
+     * 朝6時の22℃と昼2時の29℃を並べると、時間帯の差を水温の急変と誤って読む。
+     */
+    var prevTemp = null;
+    if (lastTemp) {
+      for (var pi = temps.length - 2; pi >= 0; pi--) {
+        if (bandOf(temps[pi].time) === bandOf(lastTemp.time)) { prevTemp = temps[pi]; break; }
+      }
+    }
     var lastPh = phs[phs.length - 1];
     var allLogs = logs();
     var waterChanges = allLogs.filter(function (l) { return l.type === "水換え"; });
@@ -785,11 +894,11 @@
       var t = Number(lastTemp.temp);
       if (t >= 30) {
         add("crit", "水温が高い状態です",
-          fmtLong(lastTemp.date) + "の測定で " + num(t) + "℃",
+          fmtLong(lastTemp.date) + " " + fmtTime(lastTemp) + " の測定で " + num(t) + "℃",
           "メダカは 30℃ を超えると弱りやすくなります。日よけ、足し水、水量を増やすなどで下げられます。");
       } else if (t >= 28) {
         add("warn", "水温が上がってきています",
-          fmtLong(lastTemp.date) + "の測定で " + num(t) + "℃",
+          fmtLong(lastTemp.date) + " " + fmtTime(lastTemp) + " の測定で " + num(t) + "℃",
           "このまま上がると 30℃ に届きます。直射日光が当たる時間を確かめてみてください。");
       } else if (t <= 5) {
         add("info", "水温が下がっています",
@@ -801,10 +910,13 @@
         var gap = daysBetween(prevTemp.date, lastTemp.date);
         var diff = Number(lastTemp.temp) - Number(prevTemp.temp);
         if (gap <= 7 && Math.abs(diff) >= 5) {
+          var bandName = bandOf(lastTemp.time);
           add("warn", "水温が短い間に大きく動きました",
-            fmtShort(prevTemp.date) + " " + num(prevTemp.temp) + "℃ → " +
-            fmtShort(lastTemp.date) + " " + num(t) + "℃（" + gap + "日で " + (diff > 0 ? "+" : "−") + num(Math.abs(diff)) + "℃）",
-            "急な変化は生き物の負担になります。水換えのときは水温を合わせると和らぎます。");
+            fmtShort(prevTemp.date) + " " + fmtTime(prevTemp) + " " + num(prevTemp.temp) + "℃ → " +
+            fmtShort(lastTemp.date) + " " + fmtTime(lastTemp) + " " + num(t) + "℃" +
+            "（" + gap + "日で " + (diff > 0 ? "+" : "−") + num(Math.abs(diff)) + "℃" +
+            (bandName ? "・どちらも" + bandName : "") + "）",
+            "同じ時間帯どうしの比較なので、時刻の違いによる差ではありません。急な変化は生き物の負担になります。");
         }
       }
 
@@ -813,6 +925,31 @@
           "最後の測定は " + relative(lastTemp.date) + "（" + fmtLong(lastTemp.date) + "）",
           "季節の変わり目は動きが大きい時期です。数日おきでも記録が残ると推移が見えます。");
       }
+    }
+
+    /* 測る時間帯 */
+    var temps30 = temps.filter(function (m) { return daysSince(m.date) <= 30; });
+    var bandAvg = {};
+    TIME_BANDS.forEach(function (b) {
+      var hit = temps30.filter(function (m) { return bandOf(m.time) === b.key; });
+      if (hit.length >= 2) bandAvg[b.key] = statsOf(hit, "temp").avg;
+    });
+    var bandKeys = Object.keys(bandAvg);
+    if (bandKeys.length >= 2) {
+      var values = bandKeys.map(function (k) { return bandAvg[k]; });
+      var spread = Math.max.apply(null, values) - Math.min.apply(null, values);
+      if (spread >= 2) {
+        add("info", "測る時間帯で水温が変わっています",
+          "直近30日の平均 — " + bandKeys.map(function (k) { return k + " " + num(bandAvg[k]) + "℃"; }).join(" / ") +
+          "（差 " + num(spread) + "℃）",
+          "推移を読むときは時間帯を揃えてください。水質の画面で時間帯を選べます。");
+      }
+    }
+    var noTime = temps30.filter(function (m) { return !bandOf(m.time); });
+    if (temps30.length >= 5 && noTime.length >= temps30.length * 0.5) {
+      add("info", "測定時刻の記録がない回が多めです",
+        "直近30日 " + temps30.length + "回のうち " + noTime.length + "回は時刻なし",
+        "同じ時間に測って時刻も残すと、季節の変化と時間帯の差を切り分けられます。");
     }
 
     /* pH */
@@ -1043,10 +1180,18 @@
       lines.push("- 測定なし");
     } else {
       var lastTemp = thinned(recent, "temp", 1000).slice(-1)[0];
-      lines.push("- 最新: " + fmtShort(lastTemp.date) + " " + decimals1(lastTemp.temp) + "℃（" + relative(lastTemp.date) + "）");
+      lines.push("- 最新: " + fmtShort(lastTemp.date) + " " + fmtTime(lastTemp) + " " +
+        decimals1(lastTemp.temp) + "℃（" + relative(lastTemp.date) + "）");
       lines.push("- 直近90日: " + temp.count + "回測定、" + decimals1(temp.min) + "〜" + decimals1(temp.max) + "℃（平均 " + decimals1(temp.avg) + "℃）");
+      var byBand = [];
+      TIME_BANDS.forEach(function (band) {
+        var hit = recent.filter(function (m) { return bandOf(m.time) === band.key; });
+        var st = statsOf(hit, "temp");
+        if (st) byBand.push(band.label + " 平均 " + decimals1(st.avg) + "℃（" + st.count + "回）");
+      });
+      if (byBand.length) lines.push("- 時間帯ごと: " + byBand.join(" / "));
       lines.push("- 推移: " + thinned(recent, "temp", 6).map(function (m) {
-        return fmtShort(m.date) + " " + decimals1(m.temp);
+        return fmtShort(m.date) + (m.time ? " " + m.time : "") + " " + decimals1(m.temp);
       }).join(" → "));
     }
     lines.push("");
@@ -1247,15 +1392,17 @@
 
   function waterView() {
     var rows = measurements();
-    var shown = inRange(rows);
+    var shown = inBand(inRange(rows));
     var table = rows.length === 0
       ? '<div class="card-body">' + emptyHTML("測定の記録がありません", "水温だけでも記録しておくと、季節ごとの変化が見えるようになります。") + "</div>"
       : '<div class="table-wrap"><table>' +
-        '<thead><tr><th>日付</th><th class="num">水温（℃）</th><th class="num">pH</th><th>メモ</th><th></th></tr></thead><tbody>' +
-        rows.slice().sort(byDateDesc).map(function (m) {
+        '<thead><tr><th>日時</th><th class="num">水温（℃）</th><th class="num">pH</th><th>メモ</th><th></th></tr></thead><tbody>' +
+        rows.slice().sort(function (a, b) { return stampOf(b) - stampOf(a); }).map(function (m) {
           return (
             "<tr>" +
-            '<td data-label="名前">' + esc(fmtLong(m.date)) + '<span class="muted"> ・ ' + esc(relative(m.date)) + "</span></td>" +
+            '<td data-label="名前">' + esc(fmtLong(m.date)) + " " +
+            (m.time ? esc(m.time) : '<span class="muted">時刻不明</span>') +
+            '<span class="muted"> ・ ' + esc(relative(m.date)) + (bandOf(m.time) ? " ・ " + esc(bandOf(m.time)) : "") + "</span></td>" +
             '<td class="num" data-label="水温">' + (m.temp === "" || m.temp === null || m.temp === undefined ? '<span class="muted">—</span>' : num(m.temp) + " ℃") + "</td>" +
             '<td class="num" data-label="pH">' + (m.ph === "" || m.ph === null || m.ph === undefined ? '<span class="muted">—</span>' : num(m.ph, 1)) + "</td>" +
             '<td class="memo">' + (m.note ? esc(m.note) : "") + "</td>" +
@@ -1267,13 +1414,20 @@
 
     return (
       '<div class="page-head"><div><h1 class="page-title">水質</h1>' +
-      '<p class="page-note">水温と pH は別々のグラフで見ます（ひとつの縦軸にまとめると値の大小を読み違えるため）。</p></div>' +
-      rangeChips() + "</div>" +
+      '<p class="page-note">水温は測る時間帯で数℃変わります。時間帯を揃えて見ると、本当の変化が分かります。</p></div>' +
+      '<div class="row" style="gap:8px">' + bandChips() + rangeChips() + "</div></div>" +
+
+      '<div class="card"><div class="card-head"><span class="card-title">時間帯ごとの平均水温</span>' +
+      '<span class="muted">' + (ui.range === "all" ? "全期間" : "直近" + ui.range + "日") + "</span></div>" +
+      '<div class="card-body">' +
+      (bandStatsHTML(inRange(rows)) || '<div class="empty"><span class="empty-title">まだ比べられません</span><p>時刻つきの測定が増えると、朝と昼の差が見えるようになります。</p></div>') +
+      "</div></div>" +
 
       '<div class="card"><div class="card-head"><span class="card-title">測定を記録</span></div><div class="card-body">' +
       '<form id="measurement-form" class="stack">' +
       '<div class="form-grid">' +
       field("日付", '<input class="input" name="date" type="date" value="' + today() + '" required>') +
+      field("時刻", '<input class="input" name="time" type="time" value="' + nowTime() + '">') +
       field("水温（℃）", '<input class="input" name="temp" type="number" step="0.1" placeholder="24.5">') +
       field("pH", '<input class="input" name="ph" type="number" step="0.1" min="0" max="14" placeholder="7.2">') +
       '<div class="wide">' + field("メモ", '<input class="input" name="note" placeholder="朝いちばん。少し緑水ぎみ。">') + "</div>" +
@@ -1283,10 +1437,12 @@
 
       /* 2枚を横に並べると軸ラベルが縮んで読めなくなるため、縦に積む */
       '<div class="card"><div class="card-head"><span class="card-title">水温の推移（℃）</span>' +
-      '<span class="muted">' + (ui.range === "all" ? "全期間" : "直近" + ui.range + "日") + "</span></div>" +
+      '<span class="muted">' + (ui.band === "all" ? "すべての時間" : ui.band + "だけ") + " ・ " +
+      (ui.range === "all" ? "全期間" : "直近" + ui.range + "日") + "</span></div>" +
       '<div class="card-body">' + lineChartHTML(seriesOf(shown, "temp"), "var(--series-1)", "℃", 1) + "</div></div>" +
       '<div class="card"><div class="card-head"><span class="card-title">pH の推移</span>' +
-      '<span class="muted">' + (ui.range === "all" ? "全期間" : "直近" + ui.range + "日") + "</span></div>" +
+      '<span class="muted">' + (ui.band === "all" ? "すべての時間" : ui.band + "だけ") + " ・ " +
+      (ui.range === "all" ? "全期間" : "直近" + ui.range + "日") + "</span></div>" +
       '<div class="card-body">' + lineChartHTML(seriesOf(shown, "ph"), "var(--series-2)", "", 1) + "</div></div>" +
 
       '<div class="card"><div class="card-head"><span class="card-title">測定の記録</span><span class="muted">' + rows.length + " 件</span></div>" +
@@ -1534,15 +1690,27 @@
       return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
     }
 
+    /*
+     * 測定の多くは朝。ときどき昼に測る。
+     * 昼は日射で数℃高くなるので、時間帯の差がそのまま出る。
+     */
     var ms = [];
+    var slot = 0;
     for (var i = 89; i >= 0; i -= 3) {
       var seasonal = 22 + 6 * Math.sin((i / 89) * Math.PI);
+      var atNoon = slot % 3 === 1;
+      var time = atNoon
+        ? "1" + (3 + (slot % 2)) + ":" + (slot % 2 ? "10" : "40")
+        : "0" + (7 + (slot % 2)) + ":" + (slot % 2 ? "05" : "35");
       ms.push({
         id: uid(), biotopeId: bid, date: dateAt(i),
-        temp: Math.round((seasonal + (Math.random() - 0.5) * 2.4) * 10) / 10,
-        ph: Math.round((7.1 + (Math.random() - 0.5) * 0.7) * 10) / 10,
+        /* i は「立ち上げからの経過日数」。始めたころは時刻を残していなかった、という状態にする */
+        time: i <= 8 ? null : time,
+        temp: Math.round((seasonal + (atNoon ? 2.6 : -1.4) + (Math.random() - 0.5) * 1.6) * 10) / 10,
+        ph: Math.round((7.1 + (atNoon ? 0.15 : -0.05) + (Math.random() - 0.5) * 0.5) * 10) / 10,
         note: ""
       });
+      slot++;
     }
 
     /* d は「何日前か」 */
@@ -1691,6 +1859,9 @@
       var r = el.getAttribute("data-range");
       ui.range = r === "all" ? "all" : Number(r);
       render();
+    } else if (action === "band") {
+      ui.band = el.getAttribute("data-band");
+      render();
     } else if (action === "log-type") {
       /* 描き直すと、入力途中のメモや選んだファイルが消えてしまう */
       ui.logType = el.getAttribute("data-type");
@@ -1837,6 +2008,7 @@
         state.measurements.push({
           id: uid(), biotopeId: state.activeBiotopeId,
           date: get("date"),
+          time: get("time") || null,
           temp: temp === "" ? null : Number(temp),
           ph: ph === "" ? null : Number(ph),
           note: get("note")
