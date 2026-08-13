@@ -14,7 +14,9 @@
 
   --ink: #131a16;
   --ink-2: #4f5a53;
-  --muted: #8b938c;
+  /* muted は「時刻不明」「—」「◯日前」など読ませたい文字にも使う。
+     薄いほど野帳らしいが、紙(--plane)の上でも 4.5:1 を保てるところまでにする */
+  --muted: #68716a;
 
   --hairline: #e2e5dd;
   --line: #c9cfc6;
@@ -27,9 +29,11 @@
   --series-2: #eb6834; /* pH */
   --series-3: #1baf7a; /* 匹数 */
 
-  --good: #0ca30c;
+  /* 段階の色。ピル(--surface-2 の上)で 11px の文字に載るので、明るい版は使えない。
+     暗い配色では逆に沈むため、下で別に置き直す */
+  --good: #0b7a1f;
   --warn: #fab219;
-  --crit: #d03b3b;
+  --crit: #c02a2a;
 
   --shadow-1: 0 1px 2px rgba(19, 26, 22, 0.06);
   --shadow-2: 0 1px 2px rgba(19, 26, 22, 0.05), 0 12px 28px -20px rgba(19, 26, 22, 0.5);
@@ -64,6 +68,9 @@
   --accent: #57a184;
   --accent-ink: #08120d;
   --accent-soft: #1d2a24;
+
+  --good: #4fc25c;
+  --crit: #f0736b;
 
   --series-1: #3987e5;
   --series-2: #d95926;
@@ -427,14 +434,27 @@ tbody tr.is-removed strong { font-weight: 500; }
 }
 
 #photo-dialog { max-width: 760px; }
+.lightbox-figure { display: block; }
 .lightbox-img {
   width: 100%; height: auto; max-height: 62vh; object-fit: contain;
   background: var(--surface-2); border-radius: var(--r-md); display: block;
 }
 
+/* 画像の実体がない記録（JSON だけ別のブラウザへ復元したとき） */
+.thumb.is-missing, .lightbox-figure.is-missing {
+  display: flex; align-items: center; justify-content: center;
+  padding: 10px; text-align: center;
+  background: var(--surface-2);
+}
+.lightbox-figure.is-missing { min-height: 160px; border-radius: var(--r-md); }
+.missing-note { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.lightbox-figure.is-missing .missing-note { font-size: 13px; }
+
 /* --- グラフ -------------------------------------------------------------- */
 .chart { position: relative; }
-.chart svg { display: block; width: 100%; height: auto; touch-action: none; }
+/* none にすると指がグラフに乗った瞬間ページを縦にスクロールできなくなる。
+   横方向だけ受け取り、縦はブラウザに返す */
+.chart svg { display: block; width: 100%; height: auto; touch-action: pan-y; }
 .chart-grid { stroke: var(--hairline); stroke-width: 1; }
 .chart-axis { stroke: var(--line); stroke-width: 1; }
 .chart-tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
