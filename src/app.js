@@ -292,11 +292,25 @@
     }
   }
 
+  /* 埋め込まれた画面では保存そのものが禁じられていることがある */
+  var canSaveRecords = (function () {
+    try {
+      localStorage.setItem(STORE_KEY + "/probe", "1");
+      localStorage.removeItem(STORE_KEY + "/probe");
+      return true;
+    } catch (err) {
+      return false;
+    }
+  })();
+
   function save() {
+    if (!canSaveRecords) return;
     try {
       localStorage.setItem(STORE_KEY, JSON.stringify(state));
     } catch (err) {
-      toast("保存できませんでした。ブラウザの保存容量を確認してください。");
+      canSaveRecords = false;
+      toast("保存できませんでした。この画面では記録が残りません。");
+      render();
     }
   }
 
@@ -310,10 +324,30 @@
   var dbPromise = null;
   var photoUrls = {}; // id → objectURL。作り直すと ちらつくので使い回す
 
+  /*
+   * 埋め込まれた画面では IndexedDB が使えないことがある（SecurityError）。
+   * そのときは写真をメモリに置いて、開いている間だけは使えるようにする。
+   * 保存できていないことは画面にはっきり出す。黙って消えるのが一番困る。
+   */
+  var memoryPhotos = null;
+
+  function useMemoryPhotos() {
+    if (!memoryPhotos) memoryPhotos = {};
+    return memoryPhotos;
+  }
+
+  function photosArePersisted() { return memoryPhotos === null; }
+
   function db() {
     if (!dbPromise) {
       dbPromise = new Promise(function (resolve, reject) {
-        var req = indexedDB.open(DB_NAME, 1);
+        var req;
+        try {
+          req = indexedDB.open(DB_NAME, 1);
+        } catch (err) {
+          reject(err);
+          return;
+        }
         req.onupgradeneeded = function () { req.result.createObjectStore(PHOTO_STORE); };
         req.onsuccess = function () { resolve(req.result); };
         req.onerror = function () { reject(req.error); };
@@ -334,15 +368,33 @@
     });
   }
 
-  function putPhotoBlob(id, blob) { return photoTx("readwrite", function (s) { return s.put(blob, id); }); }
-  function getPhotoBlob(id) { return photoTx("readonly", function (s) { return s.get(id); }); }
+  function putPhotoBlob(id, blob) {
+    if (!photosArePersisted()) { useMemoryPhotos()[id] = blob; return Promise.resolve(); }
+    return photoTx("readwrite", function (s) { return s.put(blob, id); }).catch(function () {
+      useMemoryPhotos()[id] = blob;
+    });
+  }
+
+  function getPhotoBlob(id) {
+    if (memoryPhotos && memoryPhotos[id]) return Promise.resolve(memoryPhotos[id]);
+    if (!photosArePersisted()) return Promise.resolve(undefined);
+    return photoTx("readonly", function (s) { return s.get(id); }).catch(function () {
+      useMemoryPhotos();
+      return undefined;
+    });
+  }
 
   function dropPhotoBlobs(ids) {
     if (ids.length === 0) return Promise.resolve();
     ids.forEach(function (id) {
       if (photoUrls[id]) { URL.revokeObjectURL(photoUrls[id]); delete photoUrls[id]; }
     });
-    return photoTx("readwrite", function (s) { ids.forEach(function (id) { s.delete(id); }); });
+    if (!photosArePersisted()) {
+      ids.forEach(function (id) { delete memoryPhotos[id]; });
+      return Promise.resolve();
+    }
+    return photoTx("readwrite", function (s) { ids.forEach(function (id) { s.delete(id); }); })
+      .catch(function () { /* 消せなくても記録側からは外す */ });
   }
 
   /** 端末の写真は数MBある。長辺 1600px の JPEG に縮めてから保存する。 */
@@ -1018,6 +1070,23 @@
 
       '<div><span class="label">この生き物の履歴</span>' +
       eventTimelineHTML(eventsOf(c.id).slice().reverse(), true, false) + "</div>";
+  }
+
+  /** 保存できない環境では、その事実を毎回いちばん上に出す */
+  function storageNoticeHTML() {
+    if (canSaveRecords && photosArePersisted()) return "";
+    var both = !canSaveRecords && !photosArePersisted();
+    return (
+      '<div class="notice">' +
+      mediaIcon("alert", 18) +
+      "<div><strong>" +
+      (both ? "この画面では記録を保存できません" : "この画面では写真を保存できません") +
+      "</strong><p>" +
+      (both
+        ? "入力した内容はページを閉じると消えます。ブラウザの保存機能がこの表示では使えないためです。"
+        : "記録そのものは残りますが、写真はページを閉じると消えます。画像の保存先（IndexedDB）がこの表示では使えないためです。") +
+      "<br>このページを新しいタブで直接開くか、1ファイル版を保存してブラウザで開くと、すべて保存されます。</p></div></div>"
+    );
   }
 
   /* --- 気づき --------------------------------------------------------------
@@ -1731,7 +1800,9 @@
 
     return (
       '<div class="page-head"><div><h1 class="page-title">写真</h1>' +
-      '<p class="page-note">' + rows.length + " 枚。長辺 1600px の JPEG に縮めて、この端末の中に保存しています。</p></div></div>" +
+      '<p class="page-note">' + rows.length + " 枚。長辺 1600px の JPEG に縮めています。" +
+      (photosArePersisted() ? "保存先はこの端末の中だけです。" : "この表示では保存できないため、閉じると消えます。") +
+      "</p></div></div>" +
 
       '<div class="card"><div class="card-head"><span class="card-title">写真を追加</span></div><div class="card-body">' +
       '<form id="photo-form" class="stack">' +
@@ -1896,13 +1967,15 @@
     document.querySelector('[data-count="gear"]').textContent = activeGearCount() || "";
 
     var main = document.getElementById("main");
-    main.innerHTML =
+    /* 括弧を外すと + が三項演算子の条件側に飲み込まれ、知らせが消える */
+    main.innerHTML = storageNoticeHTML() + (
       ui.view === "creatures" ? creaturesView() :
       ui.view === "water" ? waterView() :
       ui.view === "logs" ? logsView() :
       ui.view === "photos" ? photosView() :
       ui.view === "gear" ? gearView() :
-      dashboardView();
+      dashboardView()
+    );
     wireCharts(main);
     wirePhotos(main);
 
@@ -2354,4 +2427,10 @@
   });
 
   render();
+
+  /* 使えるかどうかは開いてみないと分からない。駄目なら知らせを出すために描き直す */
+  db().catch(function () {
+    useMemoryPhotos();
+    render();
+  });
 })();

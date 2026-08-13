@@ -290,6 +290,21 @@ button, input, select, textarea { font: inherit; color: inherit; }
 :root[data-app-theme="dark"] .pill.is-warn { color: var(--warn); background: #2c2314; }
 
 
+/* --- 保存できないときの知らせ -------------------------------------------- */
+.notice {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 14px 16px;
+  background: #fdf1d6; border: 1px solid #f0d9a4; border-radius: var(--r-lg);
+  color: #6b4a05;
+}
+.notice .icon { color: #a06a00; flex: none; margin-top: 1px; }
+.notice strong { font-size: 14px; }
+.notice p { margin: 2px 0 0; font-size: 13px; line-height: 1.6; }
+:root[data-app-theme="dark"] .notice {
+  background: #2c2314; border-color: #493a1c; color: #f0d9a4;
+}
+:root[data-app-theme="dark"] .notice .icon { color: var(--warn); }
+
 /* --- 気づき -------------------------------------------------------------- */
 .insights { display: flex; flex-direction: column; gap: 0; padding: 4px 18px; }
 .insight {
