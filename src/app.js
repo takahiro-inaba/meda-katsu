@@ -269,23 +269,28 @@
     return data;
   }
 
+  /** 読み込んだデータを、いまの版が前提にしている形に整える。復元でも同じ道を通す */
+  function normalize(data) {
+    data.creatures = data.creatures || [];
+    data.events = data.events || [];
+    data.measurements = data.measurements || [];
+    data.logs = data.logs || [];
+    data.photos = data.photos || [];
+    data.gear = data.gear || [];
+    data = migrate(data);
+    if (!data.biotopes.some(function (b) { return b.id === data.activeBiotopeId; })) {
+      data.activeBiotopeId = data.biotopes[0].id;
+    }
+    return data;
+  }
+
   function load() {
     try {
       var raw = localStorage.getItem(STORE_KEY);
       if (!raw) return emptyState();
       var data = JSON.parse(raw);
       if (!data || !Array.isArray(data.biotopes) || data.biotopes.length === 0) return emptyState();
-      data.creatures = data.creatures || [];
-      data.events = data.events || [];
-      data.measurements = data.measurements || [];
-      data.logs = data.logs || [];
-      data.photos = data.photos || [];
-      data.gear = data.gear || [];
-      data = migrate(data);
-      if (!data.biotopes.some(function (b) { return b.id === data.activeBiotopeId; })) {
-        data.activeBiotopeId = data.biotopes[0].id;
-      }
-      return data;
+      return normalize(data);
     } catch (err) {
       console.warn("保存データを読めなかったため、新規に開始します", err);
       return emptyState();
@@ -397,20 +402,58 @@
       .catch(function () { /* 消せなくても記録側からは外す */ });
   }
 
+  /*
+   * 画像を読む。createImageBitmap は速いが古い iOS Safari にはなく、
+   * 端末によっては特定の形式で失敗する。写真はスマホから入るところなので、
+   * <img> で読む道を残しておく。
+   */
+  function decodeImage(file) {
+    if (typeof createImageBitmap === "function") {
+      return createImageBitmap(file, { imageOrientation: "from-image" }).then(function (bmp) {
+        return {
+          image: bmp, width: bmp.width, height: bmp.height,
+          release: function () { bmp.close(); }
+        };
+      }, function () { return decodeViaElement(file); });
+    }
+    return decodeViaElement(file);
+  }
+
+  function decodeViaElement(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        resolve({
+          image: img, width: img.naturalWidth, height: img.naturalHeight,
+          release: function () { URL.revokeObjectURL(url); }
+        });
+      };
+      img.onerror = function () {
+        URL.revokeObjectURL(url);
+        reject(new Error("画像を読めませんでした"));
+      };
+      img.src = url;
+    });
+  }
+
   /** 端末の写真は数MBある。長辺 1600px の JPEG に縮めてから保存する。 */
   function shrink(file) {
     var MAX_EDGE = 1600;
-    return createImageBitmap(file, { imageOrientation: "from-image" }).then(function (bmp) {
-      var scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
-      var w = Math.round(bmp.width * scale);
-      var h = Math.round(bmp.height * scale);
+    return decodeImage(file).then(function (src) {
+      var scale = Math.min(1, MAX_EDGE / Math.max(src.width, src.height));
+      var w = Math.max(1, Math.round(src.width * scale));
+      var h = Math.max(1, Math.round(src.height * scale));
       var canvas = document.createElement("canvas");
       canvas.width = w;
       canvas.height = h;
-      canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
-      bmp.close();
-      return new Promise(function (resolve) {
-        canvas.toBlob(function (blob) { resolve({ blob: blob, w: w, h: h }); }, "image/jpeg", 0.82);
+      canvas.getContext("2d").drawImage(src.image, 0, 0, w, h);
+      src.release();
+      return new Promise(function (resolve, reject) {
+        canvas.toBlob(function (blob) {
+          if (blob) resolve({ blob: blob, w: w, h: h });
+          else reject(new Error("画像を変換できませんでした"));
+        }, "image/jpeg", 0.82);
       });
     });
   }
@@ -475,6 +518,15 @@
     return Math.round(ms / 86400000);
   }
 
+  /*
+   * 絞り込みの切り取り位置。記録は日付までしか持たないので、
+   * 起点も日付の頭に置く。Date.now() を起点にすると、
+   * ちょうど30日前の記録だけが「いま何時か」で入ったり入らなかったりする。
+   */
+  function daysAgo(days) {
+    return parseDate(today()).getTime() - days * 86400000;
+  }
+
   function relative(s) {
     var n = daysSince(s);
     if (n === 0) return "今日";
@@ -520,13 +572,30 @@
 
   function inRange(rows) {
     if (ui.range === "all") return rows;
-    var cutoff = Date.now() - ui.range * 86400000;
+    var cutoff = daysAgo(ui.range);
     return rows.filter(function (r) { return parseDate(r.date).getTime() >= cutoff; });
+  }
+
+  function hasValue(row, key) {
+    return row[key] !== null && row[key] !== undefined && row[key] !== "";
+  }
+
+  /*
+   * その項目を持つ最後の測定。
+   * 「いちばん新しい測定」で代用すると、pH だけ測った日の翌朝に
+   * ダッシュボードから水温が消える。測っていないことと、
+   * 直前の測定が別の項目だったことは違う。
+   */
+  function latestWith(rows, key) {
+    for (var i = rows.length - 1; i >= 0; i--) {
+      if (hasValue(rows[i], key)) return rows[i];
+    }
+    return null;
   }
 
   function seriesOf(rows, key) {
     return rows
-      .filter(function (r) { return r[key] !== null && r[key] !== undefined && r[key] !== ""; })
+      .filter(function (r) { return hasValue(r, key); })
       .map(function (r) { return { t: stampOf(r), v: Number(r[key]), date: r.date, time: r.time }; });
   }
 
@@ -577,7 +646,7 @@
   }
 
   function changeWithin(days) {
-    var cutoff = Date.now() - days * 86400000;
+    var cutoff = daysAgo(days);
     var plus = 0, minus = 0;
     mine(state.events).forEach(function (e) {
       if (parseDate(e.date).getTime() < cutoff) return;
@@ -600,6 +669,7 @@
     if (list.length === 0) return Promise.resolve(0);
     toast(list.length + " 枚を取り込んでいます…");
 
+    /* 1枚ずつ受け止める。まとめて失敗にすると、読めない1枚のために他が全部消える */
     return Promise.all(list.map(function (file) {
       return shrink(file).then(function (out) {
         var id = uid();
@@ -610,17 +680,22 @@
             logId: meta.logId || null, w: out.w, h: out.h, bytes: out.blob.size
           };
         });
+      }).catch(function (err) {
+        console.warn("写真を1枚取り込めませんでした", file.name, err);
+        return null;
       });
-    })).then(function (records) {
-      state.photos = state.photos.concat(records);
-      save();
-      render();
-      toast(records.length + " 枚を取り込みました");
+    })).then(function (results) {
+      var records = results.filter(Boolean);
+      var failed = results.length - records.length;
+      if (records.length) {
+        state.photos = state.photos.concat(records);
+        save();
+        render();
+      }
+      if (!records.length) toast("写真を取り込めませんでした。形式が読めないか、保存容量が足りないかもしれません。");
+      else if (failed) toast(records.length + " 枚を取り込みました（" + failed + " 枚は読めませんでした）");
+      else toast(records.length + " 枚を取り込みました");
       return records.length;
-    }).catch(function (err) {
-      console.warn("写真の取り込みに失敗", err);
-      toast("写真を取り込めませんでした。保存容量が足りないかもしれません。");
-      return 0;
     });
   }
 
@@ -745,7 +820,7 @@
     });
 
     return (
-      '<div class="chart" data-chart="' + esc(JSON.stringify({ points: payload, unit: unit, decimals: decimals })).replace(/"/g, "&quot;") + '">' +
+      '<div class="chart" data-chart="' + esc(JSON.stringify({ points: payload, unit: unit, decimals: decimals })) + '">' +
       svg.join("") +
       "</div>"
     );
@@ -787,22 +862,19 @@
         tip.style.top = (best.y / VH) * rect.height - 10 + "px";
       });
       host.addEventListener("pointerleave", hide);
+      /* 指で縦にスクロールし始めるとブラウザが pointercancel を投げる。出したままにしない */
+      host.addEventListener("pointercancel", hide);
     });
   }
 
   /* --- 画面: ダッシュボード ----------------------------------------------- */
 
+  /* 段階の見せかたは「気づき」と揃える。同じ強さの言葉に別の記号が付くと読み違える */
   function statusPill(days) {
     if (days === null) return '<span class="pill">記録なし</span>';
-    var cls = days >= 30 ? "is-crit" : days >= 14 ? "is-warn" : "is-good";
+    var level = days >= 30 ? "crit" : days >= 14 ? "warn" : "good";
     var word = days >= 30 ? "そろそろ交換" : days >= 14 ? "確認どき" : "良好";
-    return '<span class="pill ' + cls + '">' + icon(cls) + esc(word) + "</span>";
-  }
-
-  function icon(kind) {
-    if (kind === "is-good") return mediaIcon("check", 13);
-    if (kind === "is-warn") return mediaIcon("alert", 13);
-    return mediaIcon("info", 13);
+    return '<span class="pill is-' + level + '">' + insightIcon(level) + esc(word) + "</span>";
   }
 
   function bandChips() {
@@ -859,20 +931,20 @@
 
   function dashboardView() {
     var rows = measurements();
-    var latest = rows[rows.length - 1];
+    var lastTemp = latestWith(rows, "temp");
+    var lastPh = latestWith(rows, "ph");
     var temps = inBand(inRange(rows));
     var waterChange = lastLogOf("水換え");
     var species = {};
     creatures().forEach(function (c) { species[c.species] = true; });
     var change30 = changeWithin(30);
 
-    var hasTemp = latest && latest.temp !== "" && latest.temp !== null && latest.temp !== undefined;
-    var hero = hasTemp
-      ? '<div><div class="hero-label">いまの水温</div><div class="hero-value">' + num(latest.temp) + '<span class="hero-unit">℃</span></div></div>' +
-        '<div class="hero-meta">' + esc(fmtLong(latest.date)) +
-        (latest.time ? " " + esc(latest.time) + (bandOf(latest.time) ? "（" + esc(bandOf(latest.time)) + "）" : "") : "") +
-        " ・ " + esc(relative(latest.date)) + "に測定" +
-        (latest.ph ? " ・ pH " + num(latest.ph, 1) : "") + "</div>"
+    var hero = lastTemp
+      ? '<div><div class="hero-label">いまの水温</div><div class="hero-value">' + num(lastTemp.temp) + '<span class="hero-unit">℃</span></div></div>' +
+        '<div class="hero-meta">' + esc(fmtLong(lastTemp.date)) +
+        (lastTemp.time ? " " + esc(lastTemp.time) + (bandOf(lastTemp.time) ? "（" + esc(bandOf(lastTemp.time)) + "）" : "") : "") +
+        " ・ " + esc(relative(lastTemp.date)) + "に測定" +
+        (hasValue(lastTemp, "ph") ? " ・ pH " + num(lastTemp.ph, 1) : "") + "</div>"
       : '<div><div class="hero-label">いまの水温</div><div class="hero-value muted">—</div></div>' +
         '<div class="hero-meta">まだ測定がありません。「水質」から記録できます。</div>';
 
@@ -894,7 +966,7 @@
       tile("生き物", totalCount() + '<small>匹</small>',
         Object.keys(species).length + "種類 ・ 30日で " +
         (change30.plus || change30.minus ? "＋" + change30.plus + " / −" + change30.minus : "動きなし"), "medaka") +
-      tile("最新の pH", latest && latest.ph ? num(latest.ph, 1) : '<span class="muted">—</span>', latest && latest.ph ? esc(relative(latest.date)) + "に測定" : "未測定", "thermometer") +
+      tile("最新の pH", lastPh ? num(lastPh.ph, 1) : '<span class="muted">—</span>', lastPh ? esc(relative(lastPh.date)) + "に測定" : "未測定", "thermometer") +
       tile("最後の水換え", waterChange ? esc(relative(waterChange.date)) : '<span class="muted">—</span>', statusPill(waterChange ? daysSince(waterChange.date) : null), "waterchange") +
       tile("水草・設備", activeGearCount() + '<small>点</small>',
         GEAR_CATEGORIES.map(function (c) { return c.key + " " + gearOf(c.key, false).length; }).join(" ・ "), "sprout") +
@@ -1418,7 +1490,7 @@
     if (!temp) {
       lines.push("- 測定なし");
     } else {
-      var lastTemp = thinned(recent, "temp", 1000).slice(-1)[0];
+      var lastTemp = latestWith(recent, "temp");
       lines.push("- 最新: " + fmtShort(lastTemp.date) + " " + fmtTime(lastTemp) + " " +
         decimals1(lastTemp.temp) + "℃（" + relative(lastTemp.date) + "）");
       lines.push("- 直近90日: " + temp.count + "回測定、" + decimals1(temp.min) + "〜" + decimals1(temp.max) + "℃（平均 " + decimals1(temp.avg) + "℃）");
@@ -1694,16 +1766,32 @@
 
   /* --- 写真 ---------------------------------------------------------------- */
 
+  /*
+   * 画像の実体がない記録は起こりうる。バックアップの JSON に写真は含まれないので、
+   * 別のブラウザで復元すると記録だけが残る。src を入れないままだと
+   * 空の四角が並ぶだけで理由が分からないので、理由のほうを出す。
+   */
+  function markPhotoMissing(img) {
+    var host = img.parentNode;
+    if (!host) return;
+    host.classList.add("is-missing");
+    img.remove();
+    var note = document.createElement("span");
+    note.className = "missing-note";
+    note.textContent = "画像はこの端末にありません";
+    host.appendChild(note);
+  }
+
   /** 画像は IndexedDB にあるので src は後から差し込む */
   function wirePhotos(root) {
     root.querySelectorAll("img[data-photo]").forEach(function (img) {
       var id = img.getAttribute("data-photo");
       if (photoUrls[id]) { img.src = photoUrls[id]; return; }
       getPhotoBlob(id).then(function (blob) {
-        if (!blob) return;
+        if (!blob) { markPhotoMissing(img); return; }
         photoUrls[id] = URL.createObjectURL(blob);
         img.src = photoUrls[id];
-      });
+      }, function () { markPhotoMissing(img); });
     });
   }
 
@@ -1827,7 +1915,10 @@
     var log = p.logId ? state.logs.filter(function (l) { return l.id === p.logId; })[0] : null;
 
     host.innerHTML =
+      /* 実体がないときに差し替える先が要るので、画像は箱に入れておく */
+      '<div class="lightbox-figure">' +
       '<img class="lightbox-img" data-photo="' + p.id + '" alt="' + esc(p.caption || fmtLong(p.date) + "の写真") + '">' +
+      "</div>" +
       '<div class="row" style="justify-content:space-between">' +
       "<div><strong>" + esc(fmtLong(p.date)) + "</strong>" +
       '<span class="muted"> ・ ' + esc(relative(p.date)) + (log ? " ・ " + esc(log.type) : "") + "</span>" +
@@ -1909,11 +2000,22 @@
     });
   }
 
+  /*
+   * サンプル投入はまっさらなときだけ出す。
+   * loadSample() は既存の記録に足す作りなので、片方の画面が空なだけで押せると
+   * 本物の測定の隣に架空の測定が混ざる。どれが自分の記録か分からなくなる。
+   */
+  function biotopeIsEmpty() {
+    return [state.creatures, state.measurements, state.logs, state.gear, state.photos]
+      .every(function (list) { return mine(list).length === 0; });
+  }
+
   function emptyHTML(title, note, iconName) {
     return (
       '<div class="empty">' + mediaIcon(iconName || "ripple", 44, "empty-icon") +
       '<span class="empty-title">' + esc(title) + "</span><p>" + esc(note) + "</p>" +
-      '<button class="btn ghost" data-action="sample">サンプルデータで試す</button></div>'
+      (biotopeIsEmpty() ? '<button class="btn ghost" data-action="sample">サンプルデータで試す</button>' : "") +
+      "</div>"
     );
   }
 
@@ -1937,6 +2039,8 @@
   }
 
   /* --- 描画 ---------------------------------------------------------------- */
+
+  var renderedView = null;
 
   function render() {
     VW = chartWidth();
@@ -1967,6 +2071,14 @@
     document.querySelector('[data-count="gear"]').textContent = activeGearCount() || "";
 
     var main = document.getElementById("main");
+    /*
+     * 画面を切り替えたら、その画面の頭から読ませる。
+     * innerHTML を差し替えるだけだと、前の画面で下まで見ていた位置に居座り、
+     * 移った先の見出しが画面の上に消えたまま出てくる。
+     */
+    var viewChanged = renderedView !== ui.view;
+    renderedView = ui.view;
+
     /* 括弧を外すと + が三項演算子の条件側に飲み込まれ、知らせが消える */
     main.innerHTML = storageNoticeHTML() + (
       ui.view === "creatures" ? creaturesView() :
@@ -1981,14 +2093,14 @@
 
     var canvas = document.getElementById("water-canvas");
     if (canvas) {
-      var latestTemp = measurements().filter(function (m) {
-        return m.temp !== null && m.temp !== undefined && m.temp !== "";
-      }).slice(-1)[0];
+      var latestTemp = latestWith(measurements(), "temp");
       startWaterHero(canvas, latestTemp ? latestTemp.temp : 22, totalCount());
     } else if (waterAnim) {
       cancelAnimationFrame(waterAnim);
       waterAnim = null;
     }
+
+    if (viewChanged) window.scrollTo(0, 0);
 
     /* 履歴ダイアログを開いたまま記録したときは、その中身も描き直す */
     if (ui.eventCreatureId && document.getElementById("event-dialog").open) renderEventDialog();
@@ -2093,7 +2205,8 @@
       state.logs = state.logs.concat(sampleLogs.map(function (l) {
         return { id: uid(), biotopeId: bid, date: dateAt(89 - l.d), type: l.t, note: l.n };
       }));
-      state.biotopes.forEach(function (b) { if (b.id === bid) b.startedAt = dateAt(0); });
+      /* 立ち上げ日を入れてあるなら残す。書き換えると本人の記録が消える */
+      state.biotopes.forEach(function (b) { if (b.id === bid && !b.startedAt) b.startedAt = dateAt(0); });
     });
     addSamplePhotos(dateAt);
   }
@@ -2292,12 +2405,13 @@
   });
 
   document.addEventListener("submit", function (ev) {
+    /* どの form も送信先を持たない。取りこぼすとページが再読み込みされるので先に止める */
+    ev.preventDefault();
     var form = ev.target;
     var data = new FormData(form);
     var get = function (k) { return String(data.get(k) || "").trim(); };
 
     if (form.id === "creature-form") {
-      ev.preventDefault();
       var newId = uid();
       commit(function () {
         state.creatures.push({
@@ -2314,7 +2428,6 @@
       });
       toast("生き物を追加しました");
     } else if (form.id === "event-form") {
-      ev.preventDefault();
       var creatureId = ui.eventCreatureId;
       commit(function () {
         state.events.push({
@@ -2325,7 +2438,6 @@
       });
       toast(ui.eventKind + "を記録しました");
     } else if (form.id === "measurement-form") {
-      ev.preventDefault();
       var temp = get("temp");
       var ph = get("ph");
       if (temp === "" && ph === "") { toast("水温か pH のどちらかを入力してください"); return; }
@@ -2341,7 +2453,6 @@
       });
       toast("測定を記録しました");
     } else if (form.id === "log-form") {
-      ev.preventDefault();
       var logId = uid();
       var logDate = get("date");
       var picked = pickedFiles("log");
@@ -2354,7 +2465,6 @@
       if (picked.length) addPhotos(picked, { date: logDate, logId: logId });
       else toast(ui.logType + "を記録しました");
     } else if (form.id === "gear-form") {
-      ev.preventDefault();
       commit(function () {
         state.gear.push({
           id: uid(), biotopeId: state.activeBiotopeId,
@@ -2364,12 +2474,10 @@
       });
       toast(ui.gearCategory + "を追加しました");
     } else if (form.id === "photo-form") {
-      ev.preventDefault();
       var chosen = pickedFiles("photo");
       if (chosen.length === 0) { toast("写真を選ぶか、カメラで撮ってください"); return; }
       addPhotos(chosen, { date: get("date"), caption: get("caption") });
     } else if (form.id === "biotope-form") {
-      ev.preventDefault();
       var name = get("name") || "名前のないビオトープ";
       var nid = uid();
       commit(function () {
@@ -2381,17 +2489,24 @@
       form.reset();
       toast("「" + name + "」を追加しました");
     } else if (form.id === "restore-form") {
-      ev.preventDefault();
       var text = document.getElementById("backup-text").value;
       try {
         var next = JSON.parse(text);
         if (!next || !Array.isArray(next.biotopes) || next.biotopes.length === 0) throw new Error("形式が違います");
-        state = next;
+        /*
+         * 保存して読み直す作りだと、保存が使えない画面では書けずに
+         * 古いデータを読み戻してしまい、復元が黙って失敗する。
+         * 画面に出すものはメモリの state なので、そちらを先に差し替える。
+         */
+        state = normalize(next);
+        ui.eventCreatureId = null;
+        ui.photoId = null;
         save();
-        state = load();
         render();
         document.getElementById("backup-dialog").close();
-        toast("データを読み込みました");
+        toast(canSaveRecords
+          ? "データを読み込みました"
+          : "データを読み込みました（この画面では保存されません）");
       } catch (err) {
         toast("読み込めませんでした。書き出したJSONをそのまま貼り付けてください。");
       }
