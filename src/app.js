@@ -1638,6 +1638,58 @@
     });
   }
 
+  /**
+   * 写真の取り込み口。
+   * capture 付きの input は端末のカメラを直接開くが、そのぶん
+   * ライブラリから選べなくなるので、2 つに分けて両方置く。
+   * カメラのほうは触る画面でだけ出す（マウスの画面では意味がないため）。
+   */
+  function photoPickerHTML(prefix) {
+    return (
+      '<span class="label">写真</span>' +
+      '<div class="picker">' +
+      '<input class="hidden-input" type="file" accept="image/*" capture="environment" ' +
+      'name="camera" id="' + prefix + '-camera">' +
+      '<input class="hidden-input" type="file" accept="image/*" multiple ' +
+      'name="files" id="' + prefix + '-files">' +
+      '<button type="button" class="btn ghost only-touch" data-action="pick" data-target="' + prefix + '-camera">' +
+      mediaIcon("camera", 17) + "カメラで撮る</button>" +
+      '<button type="button" class="btn ghost" data-action="pick" data-target="' + prefix + '-files">' +
+      mediaIcon("images", 17) + "写真を選ぶ</button>" +
+      '<span class="picked-note muted" data-picked-note="' + prefix + '">まだ選ばれていません</span>' +
+      "</div>" +
+      '<div class="picked" data-picked="' + prefix + '"></div>'
+    );
+  }
+
+  /** 選んだ直後に何が入ったか見えないと、撮れたのか分からない */
+  function renderPicked(prefix) {
+    var host = document.querySelector('[data-picked="' + prefix + '"]');
+    var note = document.querySelector('[data-picked-note="' + prefix + '"]');
+    if (!host) return;
+    host.querySelectorAll("img").forEach(function (img) { URL.revokeObjectURL(img.src); });
+    host.innerHTML = "";
+
+    var picked = pickedFiles(prefix);
+    if (note) note.textContent = picked.length ? picked.length + " 枚を取り込みます" : "まだ選ばれていません";
+    picked.slice(0, 6).forEach(function (file) {
+      var img = document.createElement("img");
+      img.className = "picked-thumb";
+      img.alt = "";
+      img.src = URL.createObjectURL(file);
+      host.appendChild(img);
+    });
+  }
+
+  function pickedFiles(prefix) {
+    var out = [];
+    ["-camera", "-files"].forEach(function (suffix) {
+      var input = document.getElementById(prefix + suffix);
+      if (input && input.files) out = out.concat(Array.prototype.slice.call(input.files));
+    });
+    return out;
+  }
+
   function thumbsHTML(list) {
     if (list.length === 0) return "";
     return (
@@ -1686,7 +1738,7 @@
       '<div class="form-grid">' +
       field("撮影日", '<input class="input" name="date" type="date" value="' + today() + '" required>') +
       field("説明", '<input class="input" name="caption" placeholder="睡蓮が咲いた。">') +
-      '<div class="wide">' + field("画像ファイル", '<input class="input" name="files" type="file" accept="image/*" multiple required>') + "</div>" +
+      '<div class="wide">' + photoPickerHTML("photo") + "</div>" +
       "</div>" +
       '<div class="form-actions"><button class="btn" type="submit">取り込む</button></div>' +
       "</form></div></div>" +
@@ -1762,7 +1814,7 @@
       '<div class="form-grid">' +
       field("日付", '<input class="input" name="date" type="date" value="' + today() + '" required>') +
       '<div class="wide">' + field("メモ", '<input class="input" name="note" placeholder="1/3 換水。カルキ抜き済み。">') + "</div>" +
-      '<div class="wide">' + field("写真（任意・複数可）", '<input class="input" name="files" type="file" accept="image/*" multiple>') + "</div>" +
+      '<div class="wide">' + photoPickerHTML("log") + "</div>" +
       "</div>" +
       '<div class="form-actions"><button class="btn" type="submit">記録する</button></div>' +
       "</form></div></div>" +
@@ -2097,6 +2149,9 @@
           state.photos.forEach(function (p) { if (p.logId === lid) p.logId = null; });
         }
       );
+    } else if (action === "pick") {
+      var input = document.getElementById(el.getAttribute("data-target"));
+      if (input) input.click();
     } else if (action === "summary") {
       renderSummaryDialog();
       document.getElementById("summary-dialog").showModal();
@@ -2216,7 +2271,7 @@
       ev.preventDefault();
       var logId = uid();
       var logDate = get("date");
-      var picked = form.elements.files.files;
+      var picked = pickedFiles("log");
       commit(function () {
         state.logs.push({
           id: logId, biotopeId: state.activeBiotopeId,
@@ -2237,7 +2292,9 @@
       toast(ui.gearCategory + "を追加しました");
     } else if (form.id === "photo-form") {
       ev.preventDefault();
-      addPhotos(form.elements.files.files, { date: get("date"), caption: get("caption") });
+      var chosen = pickedFiles("photo");
+      if (chosen.length === 0) { toast("写真を選ぶか、カメラで撮ってください"); return; }
+      addPhotos(chosen, { date: get("date"), caption: get("caption") });
     } else if (form.id === "biotope-form") {
       ev.preventDefault();
       var name = get("name") || "名前のないビオトープ";
@@ -2269,6 +2326,10 @@
   });
 
   document.addEventListener("change", function (ev) {
+    if (ev.target.classList && ev.target.classList.contains("hidden-input")) {
+      renderPicked(ev.target.id.replace(/-(camera|files)$/, ""));
+      return;
+    }
     if (ev.target.id === "biotope-select") {
       state.activeBiotopeId = ev.target.value;
       save();
