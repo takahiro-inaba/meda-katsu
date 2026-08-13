@@ -927,7 +927,8 @@
     var list = insights();
     if (list.length === 0) {
       return (
-        '<div class="card"><div class="card-head"><span class="card-title">気づき</span></div>' +
+        '<div class="card"><div class="card-head"><span class="card-title">気づき</span>' +
+        '<button class="btn ghost sm" data-action="summary">まとめて相談する</button></div>' +
         '<div class="card-body"><div class="empty"><span class="empty-title">いまのところ気になる動きはありません</span>' +
         "<p>水温・水換え・生き物の増減から、記録の中で目立つ変化を探しています。</p></div></div></div>"
       );
@@ -935,7 +936,7 @@
     return (
       '<div class="card">' +
       '<div class="card-head"><span class="card-title">気づき</span>' +
-      '<span class="muted">記録の中から ' + list.length + " 件</span></div>" +
+      '<button class="btn ghost sm" data-action="summary">まとめて相談する</button></div>' +
       '<div class="card-body insights">' +
       list.map(function (n) {
         return (
@@ -961,6 +962,187 @@
     if (level === "good") return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M4.6 9.4 1.5 6.3l1-1 2.1 2.1 5-5 1 1z"/></svg>';
     if (level === "crit" || level === "warn") return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M6 1 11.5 11h-11z"/></svg>';
     return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="6" r="5.5"/></svg>';
+  }
+
+  /* --- 相談用の要約 --------------------------------------------------------
+     アプリからはどこへも送らない。貼り付けられる文章を作るだけ。
+     送り先は使う人が選ぶ。
+  ------------------------------------------------------------------------- */
+
+  function statsOf(rows, key) {
+    var values = rows
+      .filter(function (r) { return r[key] !== null && r[key] !== undefined && r[key] !== ""; })
+      .map(function (r) { return Number(r[key]); });
+    if (values.length === 0) return null;
+    var sum = values.reduce(function (a, b) { return a + b; }, 0);
+    return {
+      count: values.length,
+      min: Math.min.apply(null, values),
+      max: Math.max.apply(null, values),
+      avg: sum / values.length
+    };
+  }
+
+  /** 推移がわかる程度に間引いた列 */
+  function thinned(rows, key, wanted) {
+    var withValue = rows.filter(function (r) { return r[key] !== null && r[key] !== undefined && r[key] !== ""; });
+    if (withValue.length <= wanted) return withValue;
+    var step = (withValue.length - 1) / (wanted - 1);
+    var picked = [];
+    for (var i = 0; i < wanted; i++) picked.push(withValue[Math.round(i * step)]);
+    return picked;
+  }
+
+  function buildSummary(question) {
+    var b = activeBiotope();
+    var ms = measurements();
+    var recent = ms.filter(function (m) { return daysSince(m.date) <= 90; });
+    var allLogs = logs();
+    var lines = [];
+    var decimals1 = function (v) { return num(v, 1); };
+
+    lines.push("# ビオトープの記録");
+    lines.push("");
+    lines.push("- 名前: " + b.name);
+    if (b.startedAt) lines.push("- 立ち上げ: " + fmtLong(b.startedAt) + "（" + daysSince(b.startedAt) + "日目）");
+    lines.push("- 今日: " + fmtLong(today()));
+    lines.push("");
+
+    /* 生き物 */
+    var cs = creatures();
+    lines.push("## 生き物（合計 " + totalCount() + "匹 / " + cs.length + "種類）");
+    if (cs.length === 0) {
+      lines.push("- 記録なし");
+    } else {
+      cs.forEach(function (c) {
+        var sums = {};
+        var evs = eventsOf(c.id);
+        evs.forEach(function (e) {
+          sums[e.kind] = (sums[e.kind] || 0) + (Number(e.amount) || 0);
+        });
+        var parts = EVENT_KINDS.map(function (k) {
+          if (!sums[k.kind]) return null;
+          return k.kind + (k.sign > 0 ? "+" : k.sign < 0 ? "−" : " ") + sums[k.kind];
+        }).filter(Boolean);
+        var last = evs[evs.length - 1];
+        lines.push(
+          "- " + creatureLabel(c) + ": " + countOf(c.id) + "匹" +
+          (parts.length ? "（" + parts.join(" / ") + "）" : "") +
+          (last ? " 最後の動き " + fmtShort(last.date) + " " + eventLine(last) : "")
+        );
+      });
+      var ch = changeWithin(30);
+      lines.push("- 直近30日の増減: ＋" + ch.plus + " / −" + ch.minus);
+    }
+    lines.push("");
+
+    /* 水温・pH */
+    var temp = statsOf(recent, "temp");
+    lines.push("## 水温");
+    if (!temp) {
+      lines.push("- 測定なし");
+    } else {
+      var lastTemp = thinned(recent, "temp", 1000).slice(-1)[0];
+      lines.push("- 最新: " + fmtShort(lastTemp.date) + " " + decimals1(lastTemp.temp) + "℃（" + relative(lastTemp.date) + "）");
+      lines.push("- 直近90日: " + temp.count + "回測定、" + decimals1(temp.min) + "〜" + decimals1(temp.max) + "℃（平均 " + decimals1(temp.avg) + "℃）");
+      lines.push("- 推移: " + thinned(recent, "temp", 6).map(function (m) {
+        return fmtShort(m.date) + " " + decimals1(m.temp);
+      }).join(" → "));
+    }
+    lines.push("");
+
+    var ph = statsOf(recent, "ph");
+    lines.push("## pH");
+    if (!ph) {
+      lines.push("- 測定なし");
+    } else {
+      lines.push("- 直近90日: " + ph.count + "回測定、" + decimals1(ph.min) + "〜" + decimals1(ph.max) + "（平均 " + decimals1(ph.avg) + "）");
+      lines.push("- 推移: " + thinned(recent, "ph", 6).map(function (m) {
+        return fmtShort(m.date) + " " + decimals1(m.ph);
+      }).join(" → "));
+    }
+    lines.push("");
+
+    /* 世話 */
+    lines.push("## 世話");
+    var changes = allLogs.filter(function (l) { return l.type === "水換え"; });
+    if (changes.length) {
+      var gaps = [];
+      for (var i = 0; i < changes.length - 1 && i < 8; i++) {
+        gaps.push(daysBetween(changes[i + 1].date, changes[i].date));
+      }
+      var usual = median(gaps);
+      lines.push("- 最後の水換え: " + relative(changes[0].date) + "（" + fmtShort(changes[0].date) + "）" +
+        (usual ? " / 普段はおよそ " + Math.round(usual) + "日おき" : ""));
+    } else {
+      lines.push("- 水換えの記録なし");
+    }
+    if (allLogs.length) {
+      lines.push("- 直近の作業:");
+      allLogs.slice(0, 10).forEach(function (l) {
+        lines.push("  - " + fmtShort(l.date) + " " + l.type + (l.note ? "：" + l.note : ""));
+      });
+    }
+    lines.push("");
+
+    /* 水草・設備 */
+    lines.push("## 水草・底床・機材");
+    var anyGear = false;
+    GEAR_CATEGORIES.forEach(function (cat) {
+      var rows = gearOf(cat.key, false);
+      if (rows.length === 0) return;
+      anyGear = true;
+      lines.push("- " + cat.key + ": " + rows.map(function (g) {
+        return g.name + (g.amount ? "（" + g.amount + "）" : "") + " " + gearAge(g);
+      }).join("、"));
+    });
+    var removed = mine(state.gear).filter(function (g) { return g.removedAt; });
+    if (removed.length) {
+      anyGear = true;
+      lines.push("- 撤去済み: " + removed.map(function (g) {
+        return g.name + "（" + fmtShort(g.installedAt) + "〜" + fmtShort(g.removedAt) + "）";
+      }).join("、"));
+    }
+    if (!anyGear) lines.push("- 記録なし");
+    lines.push("");
+
+    /* 気づき */
+    var found = insights();
+    if (found.length) {
+      lines.push("## アプリが記録から見つけた点");
+      found.forEach(function (n) {
+        lines.push("- [" + insightWord(n.level) + "] " + n.title + " — " + n.evidence);
+      });
+      lines.push("");
+    }
+
+    lines.push("## 相談したいこと");
+    lines.push(question && question.trim() ? question.trim() : "（ここに知りたいことを書いてください）");
+    lines.push("");
+    lines.push("上の記録をふまえて、気をつける点と次にやるとよいことを教えてください。");
+
+    return lines.join("\n");
+  }
+
+  function renderSummaryDialog() {
+    var host = document.getElementById("summary-dialog-body");
+    host.innerHTML =
+      '<h2 class="dialog-title">記録をまとめて相談する</h2>' +
+      '<p class="muted" style="margin:0; font-size:13px">' +
+      "下の文章をコピーして、Claude や ChatGPT に貼り付けてください。" +
+      "アプリからはどこへも送信しません。貼り付け先には、ここに写っている記録が渡ります。</p>" +
+      '<label><span class="label">相談したいこと（任意）</span>' +
+      '<input class="input" id="summary-question" placeholder="夏場に水温が上がるのを抑えたい。"></label>' +
+      '<textarea class="textarea" id="summary-text" rows="12" readonly spellcheck="false" ' +
+      'style="font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px"></textarea>' +
+      '<div class="form-actions">' +
+      '<button class="btn ghost" type="button" data-action="close-dialog">閉じる</button>' +
+      '<button class="btn" type="button" data-action="copy-summary">コピーする</button></div>';
+
+    var question = document.getElementById("summary-question");
+    var text = document.getElementById("summary-text");
+    text.value = buildSummary("");
+    question.addEventListener("input", function () { text.value = buildSummary(question.value); });
   }
 
   /* --- 画面: 水草・設備 ---------------------------------------------------- */
@@ -1551,6 +1733,18 @@
           /* 写真そのものは消さない。取り消しても画像は戻せないため */
           state.photos.forEach(function (p) { if (p.logId === lid) p.logId = null; });
         }
+      );
+    } else if (action === "summary") {
+      renderSummaryDialog();
+      document.getElementById("summary-dialog").showModal();
+    } else if (action === "copy-summary") {
+      var area = document.getElementById("summary-text");
+      area.readOnly = false;
+      area.select();
+      area.readOnly = true;
+      navigator.clipboard.writeText(area.value).then(
+        function () { toast("コピーしました。Claude や ChatGPT に貼り付けてください"); },
+        function () { toast("コピーできませんでした。選択されているので手動でコピーしてください"); }
       );
     } else if (action === "gear-category") {
       /* 描き直さずに、選択状態と入力例だけ差し替える */

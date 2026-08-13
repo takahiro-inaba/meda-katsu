@@ -408,6 +408,7 @@ dialog::backdrop { background: rgba(9, 14, 11, 0.44); }
 .dialog-title { margin: 0; font-size: 16px; font-weight: 700; }
 
 #event-dialog { max-width: 620px; }
+#summary-dialog { max-width: 680px; }
 #event-dialog .dialog-body { max-height: min(82vh, 760px); overflow-y: auto; }
 
 .toast {
