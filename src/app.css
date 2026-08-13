@@ -270,6 +270,8 @@ td.num, th.num { text-align: right; }
 td.memo { white-space: normal; color: var(--ink-2); min-width: 180px; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr:hover { background: var(--surface-2); }
+tbody tr.is-removed td { color: var(--muted); }
+tbody tr.is-removed strong { font-weight: 500; }
 .actions-cell { text-align: right; }
 
 /* --- タイムライン -------------------------------------------------------- */

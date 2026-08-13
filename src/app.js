@@ -23,6 +23,17 @@
   function kindOf(name) {
     return EVENT_KINDS.filter(function (k) { return k.kind === name; })[0] || EVENT_KINDS[0];
   }
+
+  /*
+   * 水草・底床・機材。性質は違うが「入れた → 使っている → 撤去した」という
+   * 一生は同じなので、種別を持つ一つの表で扱う。
+   * 量は「3株」「20L」「1台」と単位がばらばらなので自由入力にする。
+   */
+  var GEAR_CATEGORIES = [
+    { key: "水草", note: "植えたもの。増えたり枯れたりする。", placeholder: "アナカリス", amount: "3株" },
+    { key: "底床", note: "敷いたもの。何年かで交換する。", placeholder: "赤玉土（中粒）", amount: "20L" },
+    { key: "機材", note: "動くもの。止まったら気づきたい。", placeholder: "ソーラーポンプ", amount: "1台" }
+  ];
   var VW = 760;
   var VH = 230;
 
@@ -35,14 +46,15 @@
   function emptyState() {
     var id = uid();
     return {
-      version: 3,
+      version: 4,
       activeBiotopeId: id,
       biotopes: [{ id: id, name: "メインのビオトープ", startedAt: today(), note: "" }],
       creatures: [],
       events: [],
       measurements: [],
       logs: [],
-      photos: []
+      photos: [],
+      gear: []
     };
   }
 
@@ -58,7 +70,7 @@
         delete c.count;
       });
     }
-    data.version = 3;
+    data.version = 4;
     return data;
   }
 
@@ -73,6 +85,7 @@
       data.measurements = data.measurements || [];
       data.logs = data.logs || [];
       data.photos = data.photos || [];
+      data.gear = data.gear || [];
       data = migrate(data);
       if (!data.biotopes.some(function (b) { return b.id === data.activeBiotopeId; })) {
         data.activeBiotopeId = data.biotopes[0].id;
@@ -158,7 +171,8 @@
   var state = load();
   var ui = {
     view: "dashboard", range: 90, logType: "餌やり",
-    eventCreatureId: null, eventKind: "繁殖", photoId: null
+    eventCreatureId: null, eventKind: "繁殖", photoId: null,
+    gearCategory: "水草", showRemoved: false
   };
   var undoSnapshot = null;
 
@@ -549,7 +563,8 @@
         (change30.plus || change30.minus ? "＋" + change30.plus + " / −" + change30.minus : "動きなし")) +
       tile("最新の pH", latest && latest.ph ? num(latest.ph, 1) : '<span class="muted">—</span>', latest && latest.ph ? esc(relative(latest.date)) + "に測定" : "未測定") +
       tile("最後の水換え", waterChange ? esc(relative(waterChange.date)) : '<span class="muted">—</span>', statusPill(waterChange ? daysSince(waterChange.date) : null)) +
-      tile("記録の数", (rows.length + mine(state.logs).length) + '<small>件</small>', "測定 " + rows.length + " ・ 作業 " + mine(state.logs).length) +
+      tile("水草・設備", activeGearCount() + '<small>点</small>',
+        GEAR_CATEGORIES.map(function (c) { return c.key + " " + gearOf(c.key, false).length; }).join(" ・ ")) +
       "</div>" +
 
       '<div class="card">' +
@@ -711,6 +726,104 @@
 
       '<div><span class="label">この生き物の履歴</span>' +
       eventTimelineHTML(eventsOf(c.id).slice().reverse(), true, false) + "</div>";
+  }
+
+  /* --- 画面: 水草・設備 ---------------------------------------------------- */
+
+  function gearOf(category, includeRemoved) {
+    return mine(state.gear)
+      .filter(function (g) { return g.category === category && (includeRemoved || !g.removedAt); })
+      .sort(function (a, b) { return a.installedAt < b.installedAt ? 1 : -1; });
+  }
+
+  function activeGearCount() {
+    return mine(state.gear).filter(function (g) { return !g.removedAt; }).length;
+  }
+
+  function gearAge(g) {
+    if (g.removedAt) {
+      var days = Math.round((parseDate(g.removedAt) - parseDate(g.installedAt)) / 86400000);
+      return days + "日間 使用";
+    }
+    return daysSince(g.installedAt) + "日目";
+  }
+
+  function gearTableHTML(category) {
+    var rows = gearOf(category, ui.showRemoved);
+    var meta = GEAR_CATEGORIES.filter(function (c) { return c.key === category; })[0];
+
+    if (rows.length === 0) {
+      return (
+        '<div class="empty"><span class="empty-title">' + esc(category) + "の記録がありません</span>" +
+        "<p>" + esc(meta.note) + "</p></div>"
+      );
+    }
+
+    return (
+      '<div class="table-wrap"><table>' +
+      '<thead><tr><th>名前</th><th>量</th><th>設置日</th><th>経過</th><th>メモ</th><th></th></tr></thead><tbody>' +
+      rows.map(function (g) {
+        return (
+          '<tr' + (g.removedAt ? ' class="is-removed"' : "") + ">" +
+          "<td><strong>" + esc(g.name) + "</strong>" +
+          (g.removedAt ? ' <span class="pill">撤去済み</span>' : "") + "</td>" +
+          "<td>" + (g.amount ? esc(g.amount) : '<span class="muted">—</span>') + "</td>" +
+          "<td>" + esc(fmtLong(g.installedAt)) + "</td>" +
+          "<td>" + esc(gearAge(g)) + "</td>" +
+          '<td class="memo">' + (g.note ? esc(g.note) : "") + "</td>" +
+          '<td class="actions-cell nowrap">' +
+          (g.removedAt
+            ? '<button class="btn ghost sm" data-action="restore-gear" data-id="' + g.id + '">使用中に戻す</button> '
+            : '<button class="btn ghost sm" data-action="remove-gear" data-id="' + g.id + '">撤去した</button> ') +
+          '<button class="btn quiet sm danger" data-action="del-gear" data-id="' + g.id + '">削除</button>' +
+          "</td></tr>"
+        );
+      }).join("") +
+      "</tbody></table></div>"
+    );
+  }
+
+  function gearView() {
+    var cat = GEAR_CATEGORIES.filter(function (c) { return c.key === ui.gearCategory; })[0];
+    var removedCount = mine(state.gear).filter(function (g) { return g.removedAt; }).length;
+
+    return (
+      '<div class="page-head"><div><h1 class="page-title">水草・設備</h1>' +
+      '<p class="page-note">使用中 ' + activeGearCount() + " 点。撤去したものは記録として残ります。</p></div>" +
+      (removedCount
+        ? '<div class="chips"><button class="chip" data-action="toggle-removed" aria-pressed="' + !!ui.showRemoved + '">撤去したものも表示（' + removedCount + "）</button></div>"
+        : "") +
+      "</div>" +
+
+      '<div class="card"><div class="card-head"><span class="card-title">追加する</span></div><div class="card-body">' +
+      '<form id="gear-form" class="stack">' +
+      "<div><span class=\"label\">種別</span>" +
+      '<div class="chips" role="group" aria-label="種別">' +
+      GEAR_CATEGORIES.map(function (c) {
+        return '<button type="button" class="chip" data-action="gear-category" data-category="' + esc(c.key) + '" aria-pressed="' + (ui.gearCategory === c.key) + '">' + esc(c.key) + "</button>";
+      }).join("") +
+      "</div></div>" +
+      '<div class="form-grid">' +
+      field("名前", '<input class="input" id="gear-name" name="name" placeholder="' + esc(cat.placeholder) + '" required>') +
+      field("量", '<input class="input" id="gear-amount" name="amount" placeholder="' + esc(cat.amount) + '">') +
+      field("設置日", '<input class="input" name="installedAt" type="date" value="' + today() + '" required>') +
+      '<div class="wide">' + field("メモ", '<input class="input" name="note" placeholder="' + esc(cat.note) + '">') + "</div>" +
+      "</div>" +
+      '<div class="form-actions"><button class="btn" type="submit">追加する</button></div>' +
+      "</form></div></div>" +
+
+      GEAR_CATEGORIES.map(function (c) {
+        var count = gearOf(c.key, false).length;
+        return (
+          '<div class="card"><div class="card-head"><span class="card-title">' + esc(c.key) + "</span>" +
+          '<span class="muted">使用中 ' + count + " 点</span></div>" +
+          (gearOf(c.key, ui.showRemoved).length === 0 ? '<div class="card-body">' : "") +
+          gearTableHTML(c.key) +
+          (gearOf(c.key, ui.showRemoved).length === 0 ? "</div>" : "") +
+          "</div>"
+        );
+      }).join("")
+    );
   }
 
   /* --- 画面: 水質 ---------------------------------------------------------- */
@@ -968,6 +1081,7 @@
     document.querySelector('[data-count="water"]').textContent = mine(state.measurements).length || "";
     document.querySelector('[data-count="logs"]').textContent = mine(state.logs).length || "";
     document.querySelector('[data-count="photos"]').textContent = mine(state.photos).length || "";
+    document.querySelector('[data-count="gear"]').textContent = activeGearCount() || "";
 
     var main = document.getElementById("main");
     main.innerHTML =
@@ -975,6 +1089,7 @@
       ui.view === "water" ? waterView() :
       ui.view === "logs" ? logsView() :
       ui.view === "photos" ? photosView() :
+      ui.view === "gear" ? gearView() :
       dashboardView();
     wireCharts(main);
     wirePhotos(main);
@@ -1053,6 +1168,20 @@
           });
         });
       });
+      state.gear = state.gear.concat([
+        { category: "底床", name: "赤玉土（中粒）", amount: "20L", at: 0, note: "立ち上げ時に敷いた。" },
+        { category: "水草", name: "アナカリス", amount: "5株", at: 0, note: "よく伸びる。時々間引く。" },
+        { category: "水草", name: "ホテイアオイ", amount: "2株", at: 21, note: "産卵床を兼ねる。" },
+        { category: "水草", name: "スイレン", amount: "1鉢", at: 35, note: "" },
+        { category: "機材", name: "ソーラーポンプ", amount: "1台", at: 7, note: "曇りの日は止まる。" },
+        { category: "機材", name: "投げ込みフィルター", amount: "1台", at: 0, removedAt: 42, note: "エアポンプの音が気になり撤去。" }
+      ].map(function (g) {
+        return {
+          id: uid(), biotopeId: bid, category: g.category, name: g.name, amount: g.amount,
+          installedAt: dateAt(g.at), removedAt: g.removedAt ? dateAt(g.removedAt) : null, note: g.note
+        };
+      }));
+
       state.logs = state.logs.concat(sampleLogs.map(function (l) {
         return { id: uid(), biotopeId: bid, date: dateAt(89 - l.d), type: l.t, note: l.n };
       }));
@@ -1182,6 +1311,32 @@
           state.photos.forEach(function (p) { if (p.logId === lid) p.logId = null; });
         }
       );
+    } else if (action === "gear-category") {
+      /* 描き直さずに、選択状態と入力例だけ差し替える */
+      ui.gearCategory = el.getAttribute("data-category");
+      setPressed("gear-category", "data-category", ui.gearCategory);
+      var cat = GEAR_CATEGORIES.filter(function (c) { return c.key === ui.gearCategory; })[0];
+      document.getElementById("gear-name").placeholder = cat.placeholder;
+      document.getElementById("gear-amount").placeholder = cat.amount;
+    } else if (action === "toggle-removed") {
+      ui.showRemoved = !ui.showRemoved;
+      render();
+    } else if (action === "remove-gear") {
+      var rgid = el.getAttribute("data-id");
+      commit(function () {
+        state.gear.forEach(function (g) { if (g.id === rgid) g.removedAt = today(); });
+      });
+      toast("撤去として記録しました");
+    } else if (action === "restore-gear") {
+      var bgid = el.getAttribute("data-id");
+      commit(function () {
+        state.gear.forEach(function (g) { if (g.id === bgid) g.removedAt = null; });
+      });
+    } else if (action === "del-gear") {
+      var dgid = el.getAttribute("data-id");
+      removeWithUndo("記録を削除しました", function () {
+        state.gear = state.gear.filter(function (g) { return g.id !== dgid; });
+      });
     } else if (action === "photo") {
       ui.photoId = el.getAttribute("data-id");
       renderPhotoDialog();
@@ -1266,6 +1421,16 @@
       });
       if (picked.length) addPhotos(picked, { date: logDate, logId: logId });
       else toast(ui.logType + "を記録しました");
+    } else if (form.id === "gear-form") {
+      ev.preventDefault();
+      commit(function () {
+        state.gear.push({
+          id: uid(), biotopeId: state.activeBiotopeId,
+          category: ui.gearCategory, name: get("name"), amount: get("amount"),
+          installedAt: get("installedAt"), removedAt: null, note: get("note")
+        });
+      });
+      toast(ui.gearCategory + "を追加しました");
     } else if (form.id === "photo-form") {
       ev.preventDefault();
       addPhotos(form.elements.files.files, { date: get("date"), caption: get("caption") });
