@@ -6,6 +6,7 @@
   "use strict";
 
   var STORE_KEY = "meda-katsu/v1";
+  var THEME_KEY = "meda-katsu/theme";
   var LOG_TYPES = ["餌やり", "水換え", "足し水", "掃除", "観察", "その他"];
 
   /*
@@ -371,6 +372,25 @@
   var undoSnapshot = null;
 
   if (didMigrate) save();
+
+  /* --- 明るさ --------------------------------------------------------------
+     既定はライト。OS や表示側のテーマには追従しない。
+     暗くするのはこの画面で選んだときだけ。
+  ------------------------------------------------------------------------- */
+
+  function currentTheme() {
+    try { return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; }
+    catch (err) { return "light"; }
+  }
+
+  function applyTheme(name) {
+    if (name === "dark") document.documentElement.setAttribute("data-app-theme", "dark");
+    else document.documentElement.removeAttribute("data-app-theme");
+    var btn = document.getElementById("theme-toggle");
+    if (btn) btn.textContent = name === "dark" ? "明るくする" : "暗くする";
+  }
+
+  applyTheme(currentTheme());
 
   /* --- 日付・数値 --------------------------------------------------------- */
 
@@ -848,7 +868,9 @@
 
       /* 狭い画面では固定ヘッダーに置ききれないので、ここに出す */
       '<div class="only-mobile">' +
-      '<button class="btn ghost" data-action="backup" style="width:100%">バックアップ / 復元</button>' +
+      '<div class="row" style="gap:8px">' +
+      '<button class="btn ghost grow" data-action="theme">' + (currentTheme() === "dark" ? "明るくする" : "暗くする") + "</button>" +
+      '<button class="btn ghost grow" data-action="backup">バックアップ / 復元</button></div>' +
       '<p class="muted" style="font-size:11px; text-align:center; margin:8px 0 0">' +
       "記録はこのブラウザの中にだけ保存されます。別の端末とは共有されません。</p></div>"
     );
@@ -2129,6 +2151,11 @@
       });
     } else if (action === "add-biotope") {
       document.getElementById("biotope-dialog").showModal();
+    } else if (action === "theme") {
+      var next = currentTheme() === "dark" ? "light" : "dark";
+      try { localStorage.setItem(THEME_KEY, next); } catch (err) { /* 保存できなくても切り替えは効く */ }
+      applyTheme(next);
+      render(); /* 水面の色はトークンから読むので描き直す */
     } else if (action === "backup") {
       var dlg = document.getElementById("backup-dialog");
       document.getElementById("backup-text").value = JSON.stringify(state, null, 2);

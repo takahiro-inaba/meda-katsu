@@ -1,7 +1,8 @@
 /* ---------------------------------------------------------------------------
    メダ活 — ビオトープ台帳
-   トークン: 明るいテーマを素の :root に、暗いテーマを OS 設定とテーマ指定の
-   両方で上書きする。色は必ずトークン経由で参照する。
+   トークン: ライトが既定。暗くするのはアプリ内で選んだときだけで、
+   OS や表示側のテーマには追従しない（水と紙の明るさを基調にしたいため）。
+   色は必ずトークン経由で参照する。
 --------------------------------------------------------------------------- */
 :root {
   color-scheme: light;
@@ -45,40 +46,7 @@
   --r-lg: 14px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-
-    --plane: #0e120f;
-    --surface: #191d1c;
-    --surface-2: #202523;
-    --surface-3: #272d2a;
-
-    --ink: #f1f4ef;
-    --ink-2: #b7bfb8;
-    --muted: #8b938c;
-
-    --hairline: #2a302c;
-    --line: #39403b;
-
-    --accent: #57a184;
-    --accent-ink: #08120d;
-    --accent-soft: #1d2a24;
-
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --series-3: #199e70;
-
-    --water-1: #16302a;
-    --water-2: #0f2420;
-    --water-ink: 190, 235, 214;
-
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -20px rgba(0, 0, 0, 0.9);
-  }
-}
-
-:root[data-theme="dark"] {
+:root[data-app-theme="dark"] {
   color-scheme: dark;
 
   --plane: #0e120f;
@@ -118,16 +86,10 @@
 :root[data-season="autumn"] { --water-1: #f4f1e4; --water-2: #dcd9bc; }
 :root[data-season="winter"] { --water-1: #eaf1f4; --water-2: #c4dae1; }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"])[data-season="spring"] { --water-1: #17301f; --water-2: #102316; }
-  :root:not([data-theme="light"])[data-season="summer"] { --water-1: #16302a; --water-2: #0f2420; }
-  :root:not([data-theme="light"])[data-season="autumn"] { --water-1: #2b2718; --water-2: #1d1a10; }
-  :root:not([data-theme="light"])[data-season="winter"] { --water-1: #172a31; --water-2: #101e23; }
-}
-:root[data-theme="dark"][data-season="spring"] { --water-1: #17301f; --water-2: #102316; }
-:root[data-theme="dark"][data-season="summer"] { --water-1: #16302a; --water-2: #0f2420; }
-:root[data-theme="dark"][data-season="autumn"] { --water-1: #2b2718; --water-2: #1d1a10; }
-:root[data-theme="dark"][data-season="winter"] { --water-1: #172a31; --water-2: #101e23; }
+:root[data-app-theme="dark"][data-season="spring"] { --water-1: #17301f; --water-2: #102316; }
+:root[data-app-theme="dark"][data-season="summer"] { --water-1: #16302a; --water-2: #0f2420; }
+:root[data-app-theme="dark"][data-season="autumn"] { --water-1: #2b2718; --water-2: #1d1a10; }
+:root[data-app-theme="dark"][data-season="winter"] { --water-1: #172a31; --water-2: #101e23; }
 
 * { box-sizing: border-box; }
 
@@ -325,10 +287,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .pill.is-good { color: var(--good); }
 .pill.is-warn { color: #8a5b00; background: #fdf1d6; }
 .pill.is-crit { color: var(--crit); }
-:root[data-theme="dark"] .pill.is-warn { color: var(--warn); background: #2c2314; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .pill.is-warn { color: var(--warn); background: #2c2314; }
-}
+:root[data-app-theme="dark"] .pill.is-warn { color: var(--warn); background: #2c2314; }
+
 
 /* --- 気づき -------------------------------------------------------------- */
 .insights { display: flex; flex-direction: column; gap: 0; padding: 4px 18px; }
