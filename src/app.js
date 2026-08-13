@@ -34,8 +34,15 @@
     { key: "底床", note: "敷いたもの。何年かで交換する。", placeholder: "赤玉土（中粒）", amount: "20L" },
     { key: "機材", note: "動くもの。止まったら気づきたい。", placeholder: "ソーラーポンプ", amount: "1台" }
   ];
-  var VW = 760;
+  /*
+   * グラフの座標系の幅。SVG は横幅いっぱいに拡大縮小されるので、
+   * 実際の表示幅と離れるほど文字だけが小さく（大きく）なる。
+   * スマホでは座標系そのものを狭くして、目盛りが読める大きさを保つ。
+   */
   var VH = 230;
+  var VW = 760;
+
+  function chartWidth() { return window.innerWidth < 720 ? 340 : 760; }
 
   /* --- 保存 --------------------------------------------------------------- */
 
@@ -403,7 +410,10 @@
       return '<div class="empty"><span class="empty-title">記録がありません</span><p>この期間の測定はまだありません。</p></div>';
     }
 
-    var pad = { top: 16, right: 66, bottom: 26, left: 46 };
+    var narrow = VW < 500;
+    var pad = narrow
+      ? { top: 14, right: 58, bottom: 24, left: 34 }
+      : { top: 16, right: 66, bottom: 26, left: 46 };
     var iw = VW - pad.left - pad.right;
     var ih = VH - pad.top - pad.bottom;
 
@@ -430,7 +440,11 @@
     });
     svg.push('<line class="chart-axis" x1="' + pad.left + '" y1="' + (pad.top + ih) + '" x2="' + (pad.left + iw) + '" y2="' + (pad.top + ih) + '"/>');
 
-    var ticksX = points.length <= 6 ? points : [points[0], points[Math.floor(points.length / 2)], points[points.length - 1]];
+    var ticksX = points.length <= (narrow ? 3 : 6)
+      ? points
+      : narrow
+        ? [points[0], points[points.length - 1]]
+        : [points[0], points[Math.floor(points.length / 2)], points[points.length - 1]];
     ticksX.forEach(function (p) {
       svg.push('<text class="chart-tick" x="' + px(p) + '" y="' + (pad.top + ih + 17) + '" text-anchor="middle">' + fmtShort(p.date) + "</text>");
     });
@@ -444,7 +458,7 @@
     svg.push('<path d="' + d + " L" + px(points[points.length - 1]).toFixed(1) + " " + (pad.top + ih) + " L" + px(points[0]).toFixed(1) + " " + (pad.top + ih) + ' Z" fill="' + color + '" fill-opacity="0.1"/>');
     svg.push('<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>');
 
-    if (points.length <= 40) {
+    if (points.length <= (narrow ? 20 : 40)) {
       points.forEach(function (p) {
         svg.push('<circle class="chart-dot-ring" cx="' + px(p).toFixed(1) + '" cy="' + py(p).toFixed(1) + '" r="4" fill="' + color + '"/>');
       });
@@ -581,7 +595,13 @@
       '<div class="card">' +
       '<div class="card-head"><span class="card-title">最近の作業</span><button class="btn quiet" data-action="view" data-view="logs">すべて見る</button></div>' +
       '<div class="card-body">' + timelineHTML(logs().slice(0, 6), false) + "</div>" +
-      "</div>"
+      "</div>" +
+
+      /* 狭い画面では固定ヘッダーに置ききれないので、ここに出す */
+      '<div class="only-mobile">' +
+      '<button class="btn ghost" data-action="backup" style="width:100%">バックアップ / 復元</button>' +
+      '<p class="muted" style="font-size:11px; text-align:center; margin:8px 0 0">' +
+      "記録はこのブラウザの中にだけ保存されます。別の端末とは共有されません。</p></div>"
     );
   }
 
@@ -621,10 +641,10 @@
           var last = evs[evs.length - 1];
           return (
             "<tr>" +
-            "<td><strong>" + esc(c.species) + "</strong></td>" +
-            "<td>" + (c.name ? esc(c.name) : '<span class="muted">—</span>') + "</td>" +
-            '<td class="num">' + countOf(c.id) + '<small class="muted"> 匹</small></td>' +
-            "<td>" + (last ? esc(eventLine(last)) + '<span class="muted"> ・ ' + esc(relative(last.date)) + "</span>" : '<span class="muted">—</span>') + "</td>" +
+            '<td data-label="種類"><strong>' + esc(c.species) + "</strong></td>" +
+            '<td data-label="呼び名">' + (c.name ? esc(c.name) : '<span class="muted">—</span>') + "</td>" +
+            '<td class="num" data-label="いまの数">' + countOf(c.id) + '<small class="muted"> 匹</small></td>' +
+            '<td data-label="最後の動き">' + (last ? esc(eventLine(last)) + '<span class="muted"> ・ ' + esc(relative(last.date)) + "</span>" : '<span class="muted">—</span>') + "</td>" +
             '<td class="memo">' + (c.note ? esc(c.note) : "") + "</td>" +
             '<td class="actions-cell nowrap">' +
             '<button class="btn ghost sm" data-action="history" data-id="' + c.id + '">増減を記録</button> ' +
@@ -765,11 +785,11 @@
       rows.map(function (g) {
         return (
           '<tr' + (g.removedAt ? ' class="is-removed"' : "") + ">" +
-          "<td><strong>" + esc(g.name) + "</strong>" +
+          '<td data-label="名前"><strong>' + esc(g.name) + "</strong>" +
           (g.removedAt ? ' <span class="pill">撤去済み</span>' : "") + "</td>" +
-          "<td>" + (g.amount ? esc(g.amount) : '<span class="muted">—</span>') + "</td>" +
-          "<td>" + esc(fmtLong(g.installedAt)) + "</td>" +
-          "<td>" + esc(gearAge(g)) + "</td>" +
+          '<td data-label="量">' + (g.amount ? esc(g.amount) : '<span class="muted">—</span>') + "</td>" +
+          '<td data-label="設置日">' + esc(fmtLong(g.installedAt)) + "</td>" +
+          '<td data-label="経過">' + esc(gearAge(g)) + "</td>" +
           '<td class="memo">' + (g.note ? esc(g.note) : "") + "</td>" +
           '<td class="actions-cell nowrap">' +
           (g.removedAt
@@ -838,9 +858,9 @@
         rows.slice().sort(byDateDesc).map(function (m) {
           return (
             "<tr>" +
-            "<td>" + esc(fmtLong(m.date)) + '<span class="muted"> ・ ' + esc(relative(m.date)) + "</span></td>" +
-            '<td class="num">' + (m.temp === "" || m.temp === null || m.temp === undefined ? '<span class="muted">—</span>' : num(m.temp)) + "</td>" +
-            '<td class="num">' + (m.ph === "" || m.ph === null || m.ph === undefined ? '<span class="muted">—</span>' : num(m.ph, 1)) + "</td>" +
+            '<td data-label="名前">' + esc(fmtLong(m.date)) + '<span class="muted"> ・ ' + esc(relative(m.date)) + "</span></td>" +
+            '<td class="num" data-label="水温">' + (m.temp === "" || m.temp === null || m.temp === undefined ? '<span class="muted">—</span>' : num(m.temp) + " ℃") + "</td>" +
+            '<td class="num" data-label="pH">' + (m.ph === "" || m.ph === null || m.ph === undefined ? '<span class="muted">—</span>' : num(m.ph, 1)) + "</td>" +
             '<td class="memo">' + (m.note ? esc(m.note) : "") + "</td>" +
             '<td class="actions-cell"><button class="btn quiet sm danger" data-action="del-measurement" data-id="' + m.id + '">削除</button></td>' +
             "</tr>"
@@ -1067,6 +1087,7 @@
   /* --- 描画 ---------------------------------------------------------------- */
 
   function render() {
+    VW = chartWidth();
     var select = document.getElementById("biotope-select");
     select.innerHTML = state.biotopes.map(function (b) {
       return '<option value="' + b.id + '"' + (b.id === state.activeBiotopeId ? " selected" : "") + ">" + esc(b.name) + "</option>";
@@ -1074,8 +1095,13 @@
 
     document.querySelectorAll(".nav-item").forEach(function (btn) {
       var v = btn.getAttribute("data-view");
-      if (v === ui.view) btn.setAttribute("aria-current", "page");
-      else btn.removeAttribute("aria-current");
+      if (v === ui.view) {
+        btn.setAttribute("aria-current", "page");
+        /* 狭い画面ではタブが横に流れるので、選んだものを見える位置へ寄せる */
+        if (btn.scrollIntoView) btn.scrollIntoView({ block: "nearest", inline: "nearest" });
+      } else {
+        btn.removeAttribute("aria-current");
+      }
     });
     document.querySelector('[data-count="creatures"]').textContent = creatures().length || "";
     document.querySelector('[data-count="water"]').textContent = mine(state.measurements).length || "";
@@ -1479,6 +1505,13 @@
       function () { toast("JSONをコピーしました"); },
       function () { toast("コピーできませんでした。手動で選択してください。"); }
     );
+  });
+
+  var resizeTimer = null;
+  window.addEventListener("resize", function () {
+    if (VW === chartWidth()) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(render, 150);
   });
 
   render();

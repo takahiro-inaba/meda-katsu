@@ -370,6 +370,7 @@ tbody tr.is-removed strong { font-weight: 500; }
 .empty p { margin: 0; font-size: 13px; max-width: 40ch; }
 
 .hidden { display: none !important; }
+.only-mobile { display: none; }
 .muted { color: var(--muted); }
 .nowrap { white-space: nowrap; }
 
@@ -402,8 +403,89 @@ dialog::backdrop { background: rgba(9, 14, 11, 0.44); }
   @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 6px); } }
 }
 
+/* ---------------------------------------------------------------------------
+   スマホ
+   記録するのはビオトープの前＝スマホなので、入力までの距離を最優先にする。
+   サイドバーは上部の帯に畳み、表は 1 行 1 カードに組み替える。
+--------------------------------------------------------------------------- */
 @media (max-width: 860px) {
-  .app { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--hairline); }
-  .main { padding: 20px 16px 48px; }
+  /* 1fr は minmax(auto,1fr) なので、中身の最小幅より縮まず画面をはみ出す */
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .main { padding: 18px 14px 56px; gap: 18px; }
+
+  .sidebar {
+    position: sticky; top: 0; z-index: 10;
+    height: auto; align-self: stretch;
+    flex-direction: row; flex-wrap: wrap; align-items: center;
+    gap: 10px; padding: 10px 12px;
+    border-right: 0; border-bottom: 1px solid var(--hairline);
+    overflow: visible;
+  }
+  .brand-name, .brand-sub { display: none; }
+  .sidebar-biotope { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+  .sidebar-biotope .label { display: none; }
+  .sidebar-biotope .select { flex: 1; min-width: 0; }
+  .sidebar-biotope .btn { margin-top: 0 !important; white-space: nowrap; }
+
+  /* 横に流れるタブ。項目が6つあり、下部バーに文字を並べると読めなくなる */
+  .nav {
+    /* min-width:0 がないと、中身の幅まで伸びて画面をはみ出す */
+    order: 3; flex: 0 0 100%; min-width: 0;
+    flex-direction: row; gap: 4px;
+    overflow-x: auto; overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav-item { white-space: nowrap; gap: 6px; padding: 7px 12px; }
+  .nav-count { margin-left: 0; }
+  /* 固定ヘッダーは2段まで。バックアップはダッシュボードの末尾に出す */
+  .sidebar-foot { display: none; }
+  .only-mobile { display: block; }
+
+  .page-title { font-size: 19px; }
+  .hero { padding: 18px; }
+  .hero-value { font-size: 40px; }
+  .card-body { padding: 14px; }
+  .card-head { padding: 12px 14px; }
+  .tiles { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+
+  /* 指で押せる大きさに */
+  .btn { padding: 10px 16px; }
+  .btn.sm { padding: 7px 12px; font-size: 13px; }
+  .btn.quiet { padding: 8px 10px; }
+  .chip { padding: 8px 14px; }
+  .input, .select { padding: 10px 12px; font-size: 16px; } /* 16px 未満だと iOS が拡大する */
+
+  /* 表 → 1行1カード。横スクロールでは操作列に届かない */
+  .table-wrap { overflow-x: visible; }
+  table, thead, tbody, tr, td { display: block; width: 100%; }
+  thead { display: none; }
+  tbody tr {
+    border-bottom: 1px solid var(--hairline);
+    padding: 12px 14px;
+    display: flex; flex-wrap: wrap; gap: 4px 14px;
+  }
+  tbody tr:last-child { border-bottom: 0; }
+  td, td.num { border: 0; padding: 0; text-align: left; white-space: normal; }
+  td[data-label]::before {
+    content: attr(data-label) "：";
+    color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    margin-right: 4px;
+  }
+  td[data-label="名前"], td[data-label="種類"] { flex: 1 0 100%; font-size: 15px; }
+  td[data-label="名前"]::before, td[data-label="種類"]::before { display: none; }
+  td.memo { flex: 1 0 100%; }
+  td.memo:empty { display: none; }
+  .actions-cell { flex: 1 0 100%; display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
+  .timeline-item { grid-template-columns: 68px 1fr; gap: 10px; }
+  .thumbs { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+
+  dialog { width: calc(100vw - 20px); max-height: 88vh; }
+  #event-dialog .dialog-body { max-height: 84vh; }
+  .lightbox-img { max-height: 50vh; }
+}
+
+@media (max-width: 420px) {
+  .form-grid { grid-template-columns: 1fr; }
 }
