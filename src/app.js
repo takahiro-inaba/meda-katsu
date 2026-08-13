@@ -571,6 +571,8 @@
 
       '<div class="card"><div class="hero">' + hero + "</div></div>" +
 
+      insightsHTML() +
+
       '<div class="tiles">' +
       tile("生き物", totalCount() + '<small>匹</small>',
         Object.keys(species).length + "種類 ・ 30日で " +
@@ -746,6 +748,219 @@
 
       '<div><span class="label">この生き物の履歴</span>' +
       eventTimelineHTML(eventsOf(c.id).slice().reverse(), true, false) + "</div>";
+  }
+
+  /* --- 気づき --------------------------------------------------------------
+     記録から機械的に導ける指摘だけを出す。
+     どれも「根拠になった数字」を必ず添える。数字を見せずに助言だけ出すと、
+     合っているのか判断できず、そのうち読まれなくなる。
+  ------------------------------------------------------------------------- */
+
+  var LEVEL_ORDER = { crit: 0, warn: 1, info: 2, good: 3 };
+
+  function median(values) {
+    if (values.length === 0) return null;
+    var sorted = values.slice().sort(function (a, b) { return a - b; });
+    var mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+
+  function insights() {
+    var out = [];
+    var add = function (level, title, evidence, suggestion) {
+      out.push({ level: level, title: title, evidence: evidence, suggestion: suggestion });
+    };
+
+    var ms = measurements();
+    var temps = ms.filter(function (m) { return m.temp !== null && m.temp !== undefined && m.temp !== ""; });
+    var phs = ms.filter(function (m) { return m.ph !== null && m.ph !== undefined && m.ph !== ""; });
+    var lastTemp = temps[temps.length - 1];
+    var prevTemp = temps[temps.length - 2];
+    var lastPh = phs[phs.length - 1];
+    var allLogs = logs();
+    var waterChanges = allLogs.filter(function (l) { return l.type === "水換え"; });
+
+    /* 水温 */
+    if (lastTemp) {
+      var t = Number(lastTemp.temp);
+      if (t >= 30) {
+        add("crit", "水温が高い状態です",
+          fmtLong(lastTemp.date) + "の測定で " + num(t) + "℃",
+          "メダカは 30℃ を超えると弱りやすくなります。日よけ、足し水、水量を増やすなどで下げられます。");
+      } else if (t >= 28) {
+        add("warn", "水温が上がってきています",
+          fmtLong(lastTemp.date) + "の測定で " + num(t) + "℃",
+          "このまま上がると 30℃ に届きます。直射日光が当たる時間を確かめてみてください。");
+      } else if (t <= 5) {
+        add("info", "水温が下がっています",
+          fmtLong(lastTemp.date) + "の測定で " + num(t) + "℃",
+          "メダカは低水温では餌を食べなくなります。餌やりを控えめにする時期です。");
+      }
+
+      if (prevTemp) {
+        var gap = daysBetween(prevTemp.date, lastTemp.date);
+        var diff = Number(lastTemp.temp) - Number(prevTemp.temp);
+        if (gap <= 7 && Math.abs(diff) >= 5) {
+          add("warn", "水温が短い間に大きく動きました",
+            fmtShort(prevTemp.date) + " " + num(prevTemp.temp) + "℃ → " +
+            fmtShort(lastTemp.date) + " " + num(t) + "℃（" + gap + "日で " + (diff > 0 ? "+" : "−") + num(Math.abs(diff)) + "℃）",
+            "急な変化は生き物の負担になります。水換えのときは水温を合わせると和らぎます。");
+        }
+      }
+
+      if (daysSince(lastTemp.date) >= 21) {
+        add("info", "水温の測定が空いています",
+          "最後の測定は " + relative(lastTemp.date) + "（" + fmtLong(lastTemp.date) + "）",
+          "季節の変わり目は動きが大きい時期です。数日おきでも記録が残ると推移が見えます。");
+      }
+    }
+
+    /* pH */
+    if (lastPh) {
+      var ph = Number(lastPh.ph);
+      if (ph < 6.0 || ph > 8.5) {
+        add("warn", "pH が普段の範囲から外れています",
+          fmtLong(lastPh.date) + "の測定で pH " + num(ph, 1),
+          "メダカが落ち着くのは 6.5〜8.0 あたりとされます。底床や水草、足し水の水を見直す手がかりになります。");
+      }
+      var phIn30 = phs.filter(function (m) { return daysSince(m.date) <= 30; });
+      if (phIn30.length >= 3) {
+        var lo = Math.min.apply(null, phIn30.map(function (m) { return Number(m.ph); }));
+        var hi = Math.max.apply(null, phIn30.map(function (m) { return Number(m.ph); }));
+        if (hi - lo >= 1.0) {
+          add("info", "pH の振れ幅が大きめです",
+            "直近30日で " + num(lo, 1) + " 〜 " + num(hi, 1) + "（" + phIn30.length + "回の測定）",
+            "測る時間帯でも変わります。同じ時間に測ると、本当の変化かどうか切り分けられます。");
+        }
+      }
+    }
+
+    /* 水換え */
+    if (waterChanges.length >= 1) {
+      var sinceChange = daysSince(waterChanges[0].date);
+      var intervals = [];
+      for (var i = 0; i < waterChanges.length - 1 && i < 8; i++) {
+        intervals.push(daysBetween(waterChanges[i + 1].date, waterChanges[i].date));
+      }
+      var usual = median(intervals);
+      if (sinceChange >= 30) {
+        add("warn", "水換えから間があいています",
+          "最後の水換えは " + sinceChange + "日前" + (usual ? "（普段はおよそ " + Math.round(usual) + "日おき）" : ""),
+          "足し水だけでは蒸発ぶんしか戻りません。少量でも換えると水質が落ち着きます。");
+      } else if (usual && sinceChange >= usual * 2 && sinceChange >= 14) {
+        add("info", "水換えの間隔が普段より延びています",
+          "最後の水換えは " + sinceChange + "日前。これまではおよそ " + Math.round(usual) + "日おき",
+          "忙しい時期なら無理はいりません。間隔が変わったこと自体を覚えておくと後で効きます。");
+      }
+    }
+
+    /* 生き物 */
+    var deaths30 = 0;
+    var births30 = 0;
+    mine(state.events).forEach(function (e) {
+      if (daysSince(e.date) > 30) return;
+      if (e.kind === "死亡") deaths30 += Number(e.amount) || 0;
+      if (e.kind === "繁殖") births30 += Number(e.amount) || 0;
+    });
+    var total = totalCount();
+    if (deaths30 >= 3 && total > 0 && deaths30 >= total * 0.1) {
+      add("crit", "この1か月で減りかたが大きいです",
+        "直近30日の死亡 " + deaths30 + " 匹（いまの合計 " + total + " 匹）",
+        "水温・pH の記録と、同じ時期の作業ログを並べて見てみてください。原因の見当がつくことがあります。");
+    } else if (deaths30 >= 3) {
+      add("warn", "死亡の記録が続いています",
+        "直近30日で " + deaths30 + " 匹",
+        "同じ時期の水温と作業ログを見返すと、きっかけが見つかることがあります。");
+    }
+    if (births30 > 0) {
+      add("good", "繁殖しています",
+        "直近30日で " + births30 + " 匹増えました",
+        "稚魚は親に食べられることがあります。産卵床ごと分けると生き残りやすくなります。");
+    }
+
+    creatures().forEach(function (c) {
+      var evs = eventsOf(c.id);
+      var last = evs[evs.length - 1];
+      if (last && daysSince(last.date) >= 120) {
+        add("info", creatureLabel(c) + " の数を確かめる時期です",
+          "最後に数が動いたのは " + relative(last.date) + "（" + eventLine(last) + "）",
+          "エビやタニシは知らないうちに増減します。「数え直し」で今の数に合わせられます。");
+      }
+    });
+
+    /* 底床 */
+    gearOf("底床", false).forEach(function (g) {
+      var age = daysSince(g.installedAt);
+      if (age >= 730) {
+        add("info", g.name + " を敷いてから " + Math.floor(age / 365) + "年たちました",
+          fmtLong(g.installedAt) + "から " + age + "日",
+          "赤玉土は何年かかけて崩れて泥になります。水の濁りが取れにくくなったら交換の合図です。");
+      }
+    });
+
+    /* 記録そのもの */
+    var lastAnything = [
+      ms.length ? ms[ms.length - 1].date : null,
+      allLogs.length ? allLogs[0].date : null
+    ].filter(Boolean).sort().pop();
+    if (lastAnything && daysSince(lastAnything) >= 21) {
+      add("info", "記録が途切れています",
+        "最後の記録は " + relative(lastAnything) + "（" + fmtLong(lastAnything) + "）",
+        "毎日でなくてかまいません。水温だけでも続けると、翌年の同じ時期と比べられます。");
+    }
+
+    var ps = photos();
+    if (ps.length >= 2 && daysSince(ps[0].date) >= 60) {
+      add("info", "写真の間隔があいています",
+        "最後の写真は " + relative(ps[0].date) + "。全部で " + ps.length + " 枚",
+        "同じ場所から撮った写真が並ぶと、水草の茂りかたの変化がはっきり見えます。");
+    }
+
+    return out.sort(function (a, b) { return LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]; });
+  }
+
+  function daysBetween(from, to) {
+    return Math.round((parseDate(to).getTime() - parseDate(from).getTime()) / 86400000);
+  }
+
+  function insightsHTML() {
+    var list = insights();
+    if (list.length === 0) {
+      return (
+        '<div class="card"><div class="card-head"><span class="card-title">気づき</span></div>' +
+        '<div class="card-body"><div class="empty"><span class="empty-title">いまのところ気になる動きはありません</span>' +
+        "<p>水温・水換え・生き物の増減から、記録の中で目立つ変化を探しています。</p></div></div></div>"
+      );
+    }
+    return (
+      '<div class="card">' +
+      '<div class="card-head"><span class="card-title">気づき</span>' +
+      '<span class="muted">記録の中から ' + list.length + " 件</span></div>" +
+      '<div class="card-body insights">' +
+      list.map(function (n) {
+        return (
+          '<div class="insight">' +
+          '<span class="pill is-' + n.level + '">' +
+          insightIcon(n.level) + esc(insightWord(n.level)) + "</span>" +
+          '<div class="insight-body">' +
+          '<div class="insight-title">' + esc(n.title) + "</div>" +
+          '<div class="insight-evidence">' + esc(n.evidence) + "</div>" +
+          '<div class="insight-suggestion">' + esc(n.suggestion) + "</div>" +
+          "</div></div>"
+        );
+      }).join("") +
+      "</div></div>"
+    );
+  }
+
+  function insightWord(level) {
+    return level === "crit" ? "気になる" : level === "warn" ? "注意" : level === "good" ? "順調" : "参考";
+  }
+
+  function insightIcon(level) {
+    if (level === "good") return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M4.6 9.4 1.5 6.3l1-1 2.1 2.1 5-5 1 1z"/></svg>';
+    if (level === "crit" || level === "warn") return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M6 1 11.5 11h-11z"/></svg>';
+    return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="6" r="5.5"/></svg>';
   }
 
   /* --- 画面: 水草・設備 ---------------------------------------------------- */

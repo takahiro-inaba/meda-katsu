@@ -261,6 +261,25 @@ button, input, select, textarea { font: inherit; color: inherit; }
   :root:not([data-theme="light"]) .pill.is-warn { color: var(--warn); background: #2c2314; }
 }
 
+/* --- 気づき -------------------------------------------------------------- */
+.insights { display: flex; flex-direction: column; gap: 0; padding: 4px 18px; }
+.insight {
+  display: grid; grid-template-columns: auto 1fr; gap: 12px;
+  padding: 13px 0; border-bottom: 1px solid var(--hairline);
+  align-items: start;
+}
+.insight:last-child { border-bottom: 0; }
+.insight .pill { margin-top: 2px; }
+.insight-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.insight-title { font-weight: 700; }
+.insight-evidence {
+  font-size: 12px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.insight-suggestion { font-size: 13px; color: var(--ink-2); }
+
+.pill.is-info { color: var(--ink-2); }
+
 /* --- 表 ------------------------------------------------------------------ */
 .table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
