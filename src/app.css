@@ -24,6 +24,7 @@
 
   --series-1: #2a78d6; /* 水温 */
   --series-2: #eb6834; /* pH */
+  --series-3: #1baf7a; /* 匹数 */
 
   --good: #0ca30c;
   --warn: #fab219;
@@ -62,6 +63,7 @@
 
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #199e70;
 
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -20px rgba(0, 0, 0, 0.9);
@@ -89,6 +91,7 @@
 
   --series-1: #3987e5;
   --series-2: #d95926;
+  --series-3: #199e70;
 
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -20px rgba(0, 0, 0, 0.9);
@@ -288,6 +291,13 @@ tbody tr:hover { background: var(--surface-2); }
 .tag[data-type="掃除"]::before { background: #eda100; }
 .tag[data-type="観察"]::before { background: #4a3aa7; }
 
+/* 増減の出来事。増える/減るを色だけに頼らず、文字にも ＋ / − を出している */
+.tag[data-kind="導入"]::before { background: var(--series-1); }
+.tag[data-kind="繁殖"]::before { background: var(--series-3); }
+.tag[data-kind="死亡"]::before { background: var(--crit); }
+.tag[data-kind="譲渡"]::before { background: var(--muted); }
+.tag[data-kind="数え直し"]::before { background: #4a3aa7; }
+
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
   padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px;
@@ -340,6 +350,9 @@ dialog {
 dialog::backdrop { background: rgba(9, 14, 11, 0.44); }
 .dialog-body { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
 .dialog-title { margin: 0; font-size: 16px; font-weight: 700; }
+
+#event-dialog { max-width: 620px; }
+#event-dialog .dialog-body { max-height: min(82vh, 760px); overflow-y: auto; }
 
 .toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);

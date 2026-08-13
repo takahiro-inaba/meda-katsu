@@ -7,6 +7,22 @@
 
   var STORE_KEY = "meda-katsu/v1";
   var LOG_TYPES = ["餌やり", "水換え", "足し水", "掃除", "観察", "その他"];
+
+  /*
+   * 生き物の数は保持せず、出来事の積み上げから計算する。
+   * sign 1 = 増える / -1 = 減る / 0 = その時点の数え直し（絶対値で置き換える）
+   */
+  var EVENT_KINDS = [
+    { kind: "導入", sign: 1, verb: "入れた" },
+    { kind: "繁殖", sign: 1, verb: "増えた" },
+    { kind: "死亡", sign: -1, verb: "減った" },
+    { kind: "譲渡", sign: -1, verb: "出した" },
+    { kind: "数え直し", sign: 0, verb: "数えたら" }
+  ];
+
+  function kindOf(name) {
+    return EVENT_KINDS.filter(function (k) { return k.kind === name; })[0] || EVENT_KINDS[0];
+  }
   var VW = 760;
   var VH = 230;
 
@@ -19,13 +35,30 @@
   function emptyState() {
     var id = uid();
     return {
-      version: 1,
+      version: 2,
       activeBiotopeId: id,
       biotopes: [{ id: id, name: "メインのビオトープ", startedAt: today(), note: "" }],
       creatures: [],
+      events: [],
       measurements: [],
       logs: []
     };
+  }
+
+  /* v1 は数を直接持っていたので、その数を「導入」の出来事に読み替える */
+  function migrate(data) {
+    if (data.version >= 2) return data;
+    data.events = data.events || [];
+    data.creatures.forEach(function (c) {
+      data.events.push({
+        id: uid(), biotopeId: c.biotopeId, creatureId: c.id,
+        date: c.introducedAt || today(), kind: "導入",
+        amount: Number(c.count) || 0, note: "以前の記録から引き継ぎ"
+      });
+      delete c.count;
+    });
+    data.version = 2;
+    return data;
   }
 
   function load() {
@@ -35,8 +68,10 @@
       var data = JSON.parse(raw);
       if (!data || !Array.isArray(data.biotopes) || data.biotopes.length === 0) return emptyState();
       data.creatures = data.creatures || [];
+      data.events = data.events || [];
       data.measurements = data.measurements || [];
       data.logs = data.logs || [];
+      data = migrate(data);
       if (!data.biotopes.some(function (b) { return b.id === data.activeBiotopeId; })) {
         data.activeBiotopeId = data.biotopes[0].id;
       }
@@ -56,7 +91,7 @@
   }
 
   var state = load();
-  var ui = { view: "dashboard", range: 90, logType: "餌やり" };
+  var ui = { view: "dashboard", range: 90, logType: "餌やり", eventCreatureId: null, eventKind: "繁殖" };
   var undoSnapshot = null;
 
   /* --- 日付・数値 --------------------------------------------------------- */
@@ -137,8 +172,66 @@
       .map(function (r) { return { t: parseDate(r.date).getTime(), v: Number(r[key]), date: r.date }; });
   }
 
+  function eventsOf(creatureId) {
+    return state.events
+      .filter(function (e) { return e.creatureId === creatureId; })
+      .sort(byDateAsc);
+  }
+
+  function applyEvent(count, e) {
+    var sign = kindOf(e.kind).sign;
+    var amount = Number(e.amount) || 0;
+    return sign === 0 ? amount : Math.max(0, count + sign * amount);
+  }
+
+  function countOf(creatureId) {
+    return eventsOf(creatureId).reduce(applyEvent, 0);
+  }
+
   function totalCount() {
-    return creatures().reduce(function (sum, c) { return sum + (Number(c.count) || 0); }, 0);
+    return creatures().reduce(function (sum, c) { return sum + countOf(c.id); }, 0);
+  }
+
+  /** 合計匹数の推移。数は日をまたいで一定なので階段状に描く。 */
+  function countSeries() {
+    var all = mine(state.events).slice().sort(byDateAsc);
+    if (all.length === 0) return [];
+    var per = {};
+    var points = [];
+    all.forEach(function (e, i) {
+      per[e.creatureId] = applyEvent(per[e.creatureId] || 0, e);
+      var isLastOfDay = i === all.length - 1 || all[i + 1].date !== e.date;
+      if (!isLastOfDay) return;
+      var total = 0;
+      Object.keys(per).forEach(function (k) { total += per[k]; });
+      points.push({ t: parseDate(e.date).getTime(), v: total, date: e.date });
+    });
+    /* 最後の変化から今日までは同じ数が続いている */
+    var last = points[points.length - 1];
+    if (last && last.date !== today()) {
+      points.push({ t: parseDate(today()).getTime(), v: last.v, date: today() });
+    }
+    return points;
+  }
+
+  function recentEvents(limit) {
+    return mine(state.events).slice().sort(byDateDesc).slice(0, limit);
+  }
+
+  function changeWithin(days) {
+    var cutoff = Date.now() - days * 86400000;
+    var plus = 0, minus = 0;
+    mine(state.events).forEach(function (e) {
+      if (parseDate(e.date).getTime() < cutoff) return;
+      var sign = kindOf(e.kind).sign;
+      if (sign > 0) plus += Number(e.amount) || 0;
+      else if (sign < 0) minus += Number(e.amount) || 0;
+    });
+    return { plus: plus, minus: minus };
+  }
+
+  function creatureById(id) {
+    return state.creatures.filter(function (c) { return c.id === id; })[0] || null;
   }
 
   function lastLogOf(type) {
@@ -187,7 +280,7 @@
    * 単系列の折れ線グラフ。系列がひとつなので凡例は置かず、
    * 見出しと末尾の直接ラベルで何の値かを示す。
    */
-  function lineChartHTML(points, color, unit, decimals) {
+  function lineChartHTML(points, color, unit, decimals, stepped) {
     if (points.length === 0) {
       return '<div class="empty"><span class="empty-title">記録がありません</span><p>この期間の測定はまだありません。</p></div>';
     }
@@ -224,7 +317,12 @@
       svg.push('<text class="chart-tick" x="' + px(p) + '" y="' + (pad.top + ih + 17) + '" text-anchor="middle">' + fmtShort(p.date) + "</text>");
     });
 
-    var d = points.map(function (p, i) { return (i ? "L" : "M") + px(p).toFixed(1) + " " + py(p).toFixed(1); }).join(" ");
+    var d = points.map(function (p, i) {
+      if (i === 0) return "M" + px(p).toFixed(1) + " " + py(p).toFixed(1);
+      /* 階段状のときは、次の値に変わるまで前の高さを保つ */
+      var lead = stepped ? "L" + px(p).toFixed(1) + " " + py(points[i - 1]).toFixed(1) + " " : "";
+      return lead + "L" + px(p).toFixed(1) + " " + py(p).toFixed(1);
+    }).join(" ");
     svg.push('<path d="' + d + " L" + px(points[points.length - 1]).toFixed(1) + " " + (pad.top + ih) + " L" + px(points[0]).toFixed(1) + " " + (pad.top + ih) + ' Z" fill="' + color + '" fill-opacity="0.1"/>');
     svg.push('<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>');
 
@@ -324,6 +422,7 @@
     var waterChange = lastLogOf("水換え");
     var species = {};
     creatures().forEach(function (c) { species[c.species] = true; });
+    var change30 = changeWithin(30);
 
     var hero = latest && latest.temp !== "" && latest.temp !== null && latest.temp !== undefined
       ? '<div><div class="hero-label">最新の水温</div><div class="hero-value">' + num(latest.temp) + '<span class="hero-unit">℃</span></div></div>' +
@@ -341,7 +440,9 @@
       '<div class="card"><div class="hero">' + hero + "</div></div>" +
 
       '<div class="tiles">' +
-      tile("生き物", totalCount() + '<small>匹</small>', Object.keys(species).length + "種類") +
+      tile("生き物", totalCount() + '<small>匹</small>',
+        Object.keys(species).length + "種類 ・ 30日で " +
+        (change30.plus || change30.minus ? "＋" + change30.plus + " / −" + change30.minus : "動きなし")) +
       tile("最新の pH", latest && latest.ph ? num(latest.ph, 1) : '<span class="muted">—</span>', latest && latest.ph ? esc(relative(latest.date)) + "に測定" : "未測定") +
       tile("最後の水換え", waterChange ? esc(relative(waterChange.date)) : '<span class="muted">—</span>', statusPill(waterChange ? daysSince(waterChange.date) : null)) +
       tile("記録の数", (rows.length + mine(state.logs).length) + '<small>件</small>', "測定 " + rows.length + " ・ 作業 " + mine(state.logs).length) +
@@ -371,41 +472,64 @@
 
   /* --- 画面: 生き物 -------------------------------------------------------- */
 
+  function creatureLabel(c) {
+    return c.species + (c.name ? "（" + c.name + "）" : "");
+  }
+
+  function eventLine(e) {
+    var k = kindOf(e.kind);
+    if (k.sign === 0) return "数え直し " + (Number(e.amount) || 0) + " 匹";
+    return e.kind + " " + (k.sign > 0 ? "+" : "−") + (Number(e.amount) || 0) + " 匹";
+  }
+
   function creaturesView() {
     var rows = creatures();
+    var change = changeWithin(30);
+    var counts = countSeries();
+
     var body = rows.length === 0
       ? emptyHTML("生き物がまだ登録されていません", "上のフォームから、メダカやドジョウなどを登録してください。")
       : '<div class="table-wrap"><table>' +
-        "<thead><tr><th>種類</th><th>呼び名・系統</th><th class=\"num\">数</th><th>導入日</th><th>メモ</th><th></th></tr></thead><tbody>" +
+        '<thead><tr><th>種類</th><th>呼び名・系統</th><th class="num">いまの数</th><th>最後の動き</th><th>メモ</th><th></th></tr></thead><tbody>' +
         rows.map(function (c) {
+          var evs = eventsOf(c.id);
+          var last = evs[evs.length - 1];
           return (
             "<tr>" +
             "<td><strong>" + esc(c.species) + "</strong></td>" +
             "<td>" + (c.name ? esc(c.name) : '<span class="muted">—</span>') + "</td>" +
-            '<td class="num nowrap">' +
-            '<button class="btn quiet sm" data-action="count" data-id="' + c.id + '" data-delta="-1" aria-label="' + esc(c.species) + 'を1減らす">−</button>' +
-            " " + (Number(c.count) || 0) + " " +
-            '<button class="btn quiet sm" data-action="count" data-id="' + c.id + '" data-delta="1" aria-label="' + esc(c.species) + 'を1増やす">＋</button>' +
-            "</td>" +
-            "<td>" + (c.introducedAt ? esc(fmtLong(c.introducedAt)) : '<span class="muted">—</span>') + "</td>" +
+            '<td class="num">' + countOf(c.id) + '<small class="muted"> 匹</small></td>' +
+            "<td>" + (last ? esc(eventLine(last)) + '<span class="muted"> ・ ' + esc(relative(last.date)) + "</span>" : '<span class="muted">—</span>') + "</td>" +
             '<td class="memo">' + (c.note ? esc(c.note) : "") + "</td>" +
-            '<td class="actions-cell"><button class="btn quiet sm danger" data-action="del-creature" data-id="' + c.id + '">削除</button></td>' +
-            "</tr>"
+            '<td class="actions-cell nowrap">' +
+            '<button class="btn ghost sm" data-action="history" data-id="' + c.id + '">増減を記録</button> ' +
+            '<button class="btn quiet sm danger" data-action="del-creature" data-id="' + c.id + '">削除</button>' +
+            "</td></tr>"
           );
         }).join("") +
         "</tbody></table></div>";
 
     return (
       '<div class="page-head"><div><h1 class="page-title">生き物</h1>' +
-      '<p class="page-note">合計 ' + totalCount() + " 匹を管理しています。</p></div></div>" +
+      '<p class="page-note">合計 ' + totalCount() + " 匹。直近30日で " +
+      (change.plus || change.minus
+        ? "＋" + change.plus + " / −" + change.minus + " 匹の動きがありました。"
+        : "数の動きはありません。") +
+      "</p></div></div>" +
+
+      (counts.length > 1
+        ? '<div class="card"><div class="card-head"><span class="card-title">合計匹数の推移</span>' +
+          '<span class="muted">出来事の記録から計算</span></div>' +
+          '<div class="card-body">' + lineChartHTML(counts, "var(--series-3)", "匹", 0, true) + "</div></div>"
+        : "") +
 
       '<div class="card"><div class="card-head"><span class="card-title">生き物を追加</span></div><div class="card-body">' +
       '<form id="creature-form" class="stack">' +
       '<div class="form-grid">' +
       field("種類", '<input class="input" name="species" list="species-list" placeholder="ミナミヌマエビ" required>') +
       field("呼び名・系統", '<input class="input" name="name" placeholder="楊貴妃">') +
-      field("数", '<input class="input" name="count" type="number" min="0" step="1" value="1" required>') +
-      field("導入日", '<input class="input" name="introducedAt" type="date" value="' + today() + '">') +
+      field("入れた数", '<input class="input" name="count" type="number" min="0" step="1" value="1" required>') +
+      field("導入日", '<input class="input" name="introducedAt" type="date" value="' + today() + '" required>') +
       '<div class="wide">' + field("メモ", '<input class="input" name="note" placeholder="ホームセンターで購入。稚魚10匹。">') + "</div>" +
       "</div>" +
       '<datalist id="species-list"><option value="メダカ"><option value="ドジョウ"><option value="ミナミヌマエビ"><option value="タニシ"><option value="ヤマトヌマエビ"><option value="カワニナ"></datalist>' +
@@ -414,8 +538,69 @@
 
       '<div class="card"><div class="card-head"><span class="card-title">登録されている生き物</span><span class="muted">' + rows.length + " 件</span></div>" +
       (rows.length === 0 ? '<div class="card-body">' + body + "</div>" : body) +
+      "</div>" +
+
+      (rows.length === 0 ? "" :
+        '<div class="card"><div class="card-head"><span class="card-title">最近の増減</span>' +
+        '<span class="muted">' + mine(state.events).length + " 件の記録</span></div>" +
+        '<div class="card-body">' + eventTimelineHTML(recentEvents(8), false, true) + "</div></div>")
+    );
+  }
+
+  function eventTimelineHTML(rows, allowDelete, showCreature) {
+    if (rows.length === 0) {
+      return '<div class="empty"><span class="empty-title">まだ動きがありません</span><p>繁殖や死亡を記録すると、匹数の推移がたどれるようになります。</p></div>';
+    }
+    return (
+      '<div class="timeline">' +
+      rows.map(function (e) {
+        var c = creatureById(e.creatureId);
+        return (
+          '<div class="timeline-item">' +
+          '<div class="timeline-date">' + esc(fmtShort(e.date)) + "<br>" + esc(relative(e.date)) + "</div>" +
+          '<div class="timeline-body"><div class="row">' +
+          '<span class="tag" data-kind="' + esc(e.kind) + '">' + esc(eventLine(e)) + "</span>" +
+          (showCreature ? '<span class="muted">' + esc(c ? creatureLabel(c) : "削除された生き物") + "</span>" : "") +
+          (allowDelete ? '<button class="btn quiet sm danger" style="margin-left:auto" data-action="del-event" data-id="' + e.id + '">削除</button>' : "") +
+          "</div>" +
+          (e.note ? '<div class="timeline-memo">' + esc(e.note) + "</div>" : "") +
+          "</div></div>"
+        );
+      }).join("") +
       "</div>"
     );
+  }
+
+  /** 生き物ごとの履歴ダイアログの中身 */
+  function renderEventDialog() {
+    var c = creatureById(ui.eventCreatureId);
+    var host = document.getElementById("event-dialog-body");
+    if (!c) { host.innerHTML = ""; return; }
+    var k = kindOf(ui.eventKind);
+
+    host.innerHTML =
+      '<div class="row" style="justify-content:space-between">' +
+      '<h2 class="dialog-title">' + esc(creatureLabel(c)) + "</h2>" +
+      '<span class="pill">いま ' + countOf(c.id) + " 匹</span></div>" +
+
+      '<form id="event-form" class="stack">' +
+      "<div><span class=\"label\">何があったか</span>" +
+      '<div class="chips" role="group" aria-label="出来事の種別">' +
+      EVENT_KINDS.map(function (e) {
+        return '<button type="button" class="chip" data-action="event-kind" data-kind="' + esc(e.kind) + '" aria-pressed="' + (ui.eventKind === e.kind) + '">' + esc(e.kind) + "</button>";
+      }).join("") +
+      "</div></div>" +
+      '<div class="form-grid">' +
+      field("日付", '<input class="input" name="date" type="date" value="' + today() + '" required>') +
+      field(k.sign === 0 ? "数えた匹数" : "匹数", '<input class="input" name="amount" type="number" min="0" step="1" value="1" required>') +
+      '<div class="wide">' + field("メモ", '<input class="input" name="note" placeholder="' + (k.sign === 0 ? "エビは正確に数えられないので概算。" : "水草に卵。稚魚を確認。") + '">') + "</div>" +
+      "</div>" +
+      '<div class="form-actions"><button class="btn ghost" type="button" data-action="close-dialog">閉じる</button>' +
+      '<button class="btn" type="submit">記録する</button></div>' +
+      "</form>" +
+
+      '<div><span class="label">この生き物の履歴</span>' +
+      eventTimelineHTML(eventsOf(c.id).slice().reverse(), true, false) + "</div>";
   }
 
   /* --- 画面: 水質 ---------------------------------------------------------- */
@@ -576,7 +761,9 @@
       ui.view === "logs" ? logsView() :
       dashboardView();
     wireCharts(main);
-    main.scrollTop = 0;
+
+    /* 履歴ダイアログを開いたまま記録したときは、その中身も描き直す */
+    if (ui.eventCreatureId && document.getElementById("event-dialog").open) renderEventDialog();
   }
 
   /* --- サンプルデータ ------------------------------------------------------ */
@@ -616,12 +803,39 @@
 
     commit(function () {
       state.measurements = state.measurements.concat(ms);
-      state.creatures = state.creatures.concat([
-        { id: uid(), biotopeId: bid, species: "メダカ", name: "楊貴妃", count: 12, introducedAt: dateAt(0), note: "立ち上げ時に導入。" },
-        { id: uid(), biotopeId: bid, species: "ドジョウ", name: "マドジョウ", count: 2, introducedAt: dateAt(14), note: "底床の掃除役。" },
-        { id: uid(), biotopeId: bid, species: "ミナミヌマエビ", name: "", count: 20, introducedAt: dateAt(30), note: "コケ取り。かなり増えた。" },
-        { id: uid(), biotopeId: bid, species: "タニシ", name: "ヒメタニシ", count: 6, introducedAt: dateAt(30), note: "" }
-      ]);
+      var sampleCreatures = [
+        { species: "メダカ", name: "楊貴妃", note: "立ち上げ時に導入。", events: [
+          { at: 0, kind: "導入", amount: 12 },
+          { at: 46, kind: "死亡", amount: 1, note: "1匹だけ弱っていた。" },
+          { at: 61, kind: "繁殖", amount: 8, note: "産卵床から稚魚を確認。" },
+          { at: 87, kind: "繁殖", amount: 5, note: "二回目の稚魚。" }
+        ] },
+        { species: "ドジョウ", name: "マドジョウ", note: "底床の掃除役。", events: [
+          { at: 14, kind: "導入", amount: 2 }
+        ] },
+        { species: "ミナミヌマエビ", name: "", note: "コケ取り。数は概算。", events: [
+          { at: 30, kind: "導入", amount: 20 },
+          { at: 75, kind: "数え直し", amount: 34, note: "増えているが正確には数えられない。" }
+        ] },
+        { species: "タニシ", name: "ヒメタニシ", note: "", events: [
+          { at: 30, kind: "導入", amount: 6 },
+          { at: 68, kind: "譲渡", amount: 2, note: "知人のビオトープへ。" }
+        ] }
+      ];
+
+      sampleCreatures.forEach(function (s) {
+        var cid = uid();
+        state.creatures.push({
+          id: cid, biotopeId: bid, species: s.species, name: s.name,
+          introducedAt: dateAt(s.events[0].at), note: s.note
+        });
+        s.events.forEach(function (e) {
+          state.events.push({
+            id: uid(), biotopeId: bid, creatureId: cid,
+            date: dateAt(e.at), kind: e.kind, amount: e.amount, note: e.note || ""
+          });
+        });
+      });
       state.logs = state.logs.concat(sampleLogs.map(function (l) {
         return { id: uid(), biotopeId: bid, date: dateAt(89 - l.d), type: l.t, note: l.n };
       }));
@@ -651,18 +865,23 @@
       render();
     } else if (action === "sample") {
       loadSample();
-    } else if (action === "count") {
-      var delta = Number(el.getAttribute("data-delta"));
-      var cid = el.getAttribute("data-id");
-      commit(function () {
-        state.creatures.forEach(function (c) {
-          if (c.id === cid) c.count = Math.max(0, (Number(c.count) || 0) + delta);
-        });
+    } else if (action === "history") {
+      ui.eventCreatureId = el.getAttribute("data-id");
+      renderEventDialog();
+      document.getElementById("event-dialog").showModal();
+    } else if (action === "event-kind") {
+      ui.eventKind = el.getAttribute("data-kind");
+      renderEventDialog();
+    } else if (action === "del-event") {
+      var eid = el.getAttribute("data-id");
+      removeWithUndo("増減の記録を削除しました", function () {
+        state.events = state.events.filter(function (e) { return e.id !== eid; });
       });
     } else if (action === "del-creature") {
       var did = el.getAttribute("data-id");
-      removeWithUndo("生き物の記録を削除しました", function () {
+      removeWithUndo("生き物と、その増減の記録を削除しました", function () {
         state.creatures = state.creatures.filter(function (c) { return c.id !== did; });
+        state.events = state.events.filter(function (e) { return e.creatureId !== did; });
       });
     } else if (action === "del-measurement") {
       var mid = el.getAttribute("data-id");
@@ -690,15 +909,32 @@
 
     if (form.id === "creature-form") {
       ev.preventDefault();
+      var newId = uid();
       commit(function () {
         state.creatures.push({
-          id: uid(), biotopeId: state.activeBiotopeId,
+          id: newId, biotopeId: state.activeBiotopeId,
           species: get("species"), name: get("name"),
-          count: Number(get("count")) || 0,
           introducedAt: get("introducedAt"), note: get("note")
+        });
+        /* 最初の数も「導入」という出来事として持つ */
+        state.events.push({
+          id: uid(), biotopeId: state.activeBiotopeId, creatureId: newId,
+          date: get("introducedAt"), kind: "導入",
+          amount: Number(get("count")) || 0, note: ""
         });
       });
       toast("生き物を追加しました");
+    } else if (form.id === "event-form") {
+      ev.preventDefault();
+      var creatureId = ui.eventCreatureId;
+      commit(function () {
+        state.events.push({
+          id: uid(), biotopeId: state.activeBiotopeId, creatureId: creatureId,
+          date: get("date"), kind: ui.eventKind,
+          amount: Number(get("amount")) || 0, note: get("note")
+        });
+      });
+      toast(ui.eventKind + "を記録しました");
     } else if (form.id === "measurement-form") {
       ev.preventDefault();
       var temp = get("temp");
