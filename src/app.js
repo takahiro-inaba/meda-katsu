@@ -79,6 +79,149 @@
   var VH = 230;
   var VW = 760;
 
+  /* --- 季節 ----------------------------------------------------------------
+     ビオトープは季節そのものなので、水の色を季節で変える。
+     ボタンなどの色は動かさない（対比を検証した値を保つため）。
+  ------------------------------------------------------------------------- */
+
+  var SEASONS = [
+    { key: "spring", label: "春", icon: "sprout", months: [3, 4, 5] },
+    { key: "summer", label: "夏", icon: "leaf", months: [6, 7, 8] },
+    { key: "autumn", label: "秋", icon: "leaf", months: [9, 10, 11] },
+    { key: "winter", label: "冬", icon: "ripple", months: [12, 1, 2] }
+  ];
+
+  function season() {
+    var m = new Date().getMonth() + 1;
+    return SEASONS.filter(function (s2) { return s2.months.indexOf(m) >= 0; })[0];
+  }
+
+  /* --- 生きている水面 ------------------------------------------------------
+     ダッシュボードの主役。水温で色みが動き、メダカがゆっくり泳ぐ。
+     動きを減らす設定のときは 1 枚だけ描いて止める。
+  ------------------------------------------------------------------------- */
+
+  var waterAnim = null;
+
+  function startWaterHero(canvas, temp, population) {
+    if (waterAnim) { cancelAnimationFrame(waterAnim); waterAnim = null; }
+    if (!canvas || !canvas.getContext) return;
+
+    var ctx = canvas.getContext("2d");
+    var styles = getComputedStyle(document.documentElement);
+    var top = styles.getPropertyValue("--water-1").trim() || "#e6f2ec";
+    var bottom = styles.getPropertyValue("--water-2").trim() || "#b9dfd0";
+    var inkRgb = styles.getPropertyValue("--water-ink").trim() || "20, 40, 32";
+
+    /* 22℃ を中心に、暖かいほど明るく、冷たいほど沈んだ色に寄せる */
+    var warmth = Math.max(-1, Math.min(1, ((Number(temp) || 22) - 22) / 9));
+
+    var still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    /* 飾りではなく記録の反映。いる数が多いほど水面もにぎやかになる */
+    var count = Math.max(0, Math.min(8, Math.round((population || 0) / 8)));
+    var fish = [];
+    for (var i = 0; i < count; i++) {
+      fish.push({
+        x: Math.random(),
+        y: 0.28 + Math.random() * 0.55,
+        speed: (0.012 + Math.random() * 0.02) * (Math.random() < 0.5 ? -1 : 1),
+        scale: 0.6 + Math.random() * 0.6,
+        phase: Math.random() * 6.28
+      });
+    }
+
+    function draw(t) {
+      var ratio = Math.min(window.devicePixelRatio || 1, 2);
+      var w = canvas.clientWidth;
+      var h = canvas.clientHeight;
+      if (!w || !h) return;
+      if (canvas.width !== w * ratio) { canvas.width = w * ratio; canvas.height = h * ratio; }
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      var grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, top);
+      grad.addColorStop(1, bottom);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      /* 水温の色み */
+      ctx.fillStyle = warmth >= 0
+        ? "rgba(235, 175, 80, " + (warmth * 0.16).toFixed(3) + ")"
+        : "rgba(70, 130, 190, " + (-warmth * 0.16).toFixed(3) + ")";
+      ctx.fillRect(0, 0, w, h);
+
+      /* 水面のうねり */
+      ctx.lineWidth = 1.4;
+      for (var r = 0; r < 4; r++) {
+        var y0 = h * (0.2 + r * 0.2);
+        ctx.strokeStyle = "rgba(" + inkRgb + ", " + (0.07 + r * 0.012).toFixed(3) + ")";
+        ctx.beginPath();
+        for (var x = 0; x <= w; x += 6) {
+          var y = y0 +
+            Math.sin(x / (70 + r * 22) + t / (2600 + r * 700) + r) * (3.5 + r) +
+            Math.sin(x / 33 - t / 3400) * 1.2;
+          if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      /* メダカ */
+      fish.forEach(function (f) {
+        var fx = ((f.x + (still ? 0 : (t / 1000) * f.speed)) % 1 + 1) % 1;
+        var px = fx * (w + 60) - 30;
+        var py = f.y * h + Math.sin(t / 1400 + f.phase) * 5;
+        var dir = f.speed >= 0 ? 1 : -1;
+        var len = 15 * f.scale;
+        var hgt = 5.4 * f.scale;
+
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.scale(dir, 1);
+        ctx.fillStyle = "rgba(" + inkRgb + ", " + (0.26 + f.scale * 0.16).toFixed(3) + ")";
+        ctx.beginPath();
+        ctx.ellipse(0, 0, len / 2, hgt / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        var tailWag = Math.sin(t / 260 + f.phase) * hgt * 0.35;
+        ctx.moveTo(-len / 2 + 1, 0);
+        ctx.lineTo(-len / 2 - hgt * 0.9, -hgt * 0.7 + tailWag);
+        ctx.lineTo(-len / 2 - hgt * 0.9, hgt * 0.7 + tailWag);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      });
+
+      if (!still && canvas.isConnected) waterAnim = requestAnimationFrame(draw);
+    }
+
+    draw(still ? 0 : performance.now());
+  }
+
+  /* --- アイコン ------------------------------------------------------------ */
+
+  var VIEW_ICONS = {
+    dashboard: "ripple", creatures: "medaka", water: "thermometer",
+    logs: "topup", gear: "sprout", photos: "camera"
+  };
+
+  var LOG_ICONS = {
+    "餌やり": "food", "水換え": "waterchange", "足し水": "topup",
+    "掃除": "clean", "観察": "observe", "その他": "dot"
+  };
+
+  var GEAR_ICONS = { "水草": "plant", "底床": "substrate", "機材": "pump" };
+
+  /** 種類の名前から絵柄を選ぶ。当てはまらないものはメダカの姿で代用する */
+  function speciesIcon(name) {
+    var n = String(name || "");
+    if (/ドジョウ|どじょう|鰌/.test(n)) return "loach";
+    if (/エビ|えび|蝦|海老/.test(n)) return "shrimp";
+    if (/タニシ|たにし|貝|カワニナ|巻貝/.test(n)) return "snail";
+    if (/藻|草|モス|アナカリス|マツモ/.test(n)) return "plant";
+    return "medaka";
+  }
+
   function chartWidth() { return window.innerWidth < 720 ? 340 : 760; }
 
   /* --- 保存 --------------------------------------------------------------- */
@@ -585,9 +728,9 @@
   }
 
   function icon(kind) {
-    if (kind === "is-good") return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M4.6 9.4 1.5 6.3l1-1 2.1 2.1 5-5 1 1z"/></svg>';
-    if (kind === "is-warn") return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M6 1 11.5 11h-11z"/></svg>';
-    return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="6" r="5.5"/></svg>';
+    if (kind === "is-good") return mediaIcon("check", 13);
+    if (kind === "is-warn") return mediaIcon("alert", 13);
+    return mediaIcon("info", 13);
   }
 
   function bandChips() {
@@ -651,34 +794,38 @@
     creatures().forEach(function (c) { species[c.species] = true; });
     var change30 = changeWithin(30);
 
-    var hero = latest && latest.temp !== "" && latest.temp !== null && latest.temp !== undefined
-      ? '<div><div class="hero-label">最新の水温</div><div class="hero-value">' + num(latest.temp) + '<span class="hero-unit">℃</span></div></div>' +
+    var hasTemp = latest && latest.temp !== "" && latest.temp !== null && latest.temp !== undefined;
+    var hero = hasTemp
+      ? '<div><div class="hero-label">いまの水温</div><div class="hero-value">' + num(latest.temp) + '<span class="hero-unit">℃</span></div></div>' +
         '<div class="hero-meta">' + esc(fmtLong(latest.date)) +
         (latest.time ? " " + esc(latest.time) + (bandOf(latest.time) ? "（" + esc(bandOf(latest.time)) + "）" : "") : "") +
         " ・ " + esc(relative(latest.date)) + "に測定" +
         (latest.ph ? " ・ pH " + num(latest.ph, 1) : "") + "</div>"
-      : '<div><div class="hero-label">最新の水温</div><div class="hero-value muted">—</div></div>' +
+      : '<div><div class="hero-label">いまの水温</div><div class="hero-value muted">—</div></div>' +
         '<div class="hero-meta">まだ測定がありません。「水質」から記録できます。</div>';
 
     return (
       '<div class="page-head"><div>' +
       '<h1 class="page-title">' + esc(activeBiotope().name) + "</h1>" +
-      '<p class="page-note">' + (activeBiotope().startedAt ? "立ち上げ " + esc(fmtLong(activeBiotope().startedAt)) + "・" + daysSince(activeBiotope().startedAt) + "日目" : "ビオトープの様子") + "</p>" +
+      '<p class="page-note"><span class="season-chip">' + mediaIcon(season().icon, 15) + esc(season().label) + "のビオトープ</span>" +
+      (activeBiotope().startedAt ? "立ち上げ " + esc(fmtLong(activeBiotope().startedAt)) + " ・ " + daysSince(activeBiotope().startedAt) + "日目" : "") + "</p>" +
       "</div>" +
       '<div class="row" style="gap:8px">' + bandChips() + rangeChips() + "</div></div>" +
 
-      '<div class="card"><div class="hero">' + hero + "</div></div>" +
+      '<div class="card water-card">' +
+      '<canvas class="water-canvas" id="water-canvas" aria-hidden="true"></canvas>' +
+      '<div class="hero">' + hero + "</div></div>" +
 
       insightsHTML() +
 
       '<div class="tiles">' +
       tile("生き物", totalCount() + '<small>匹</small>',
         Object.keys(species).length + "種類 ・ 30日で " +
-        (change30.plus || change30.minus ? "＋" + change30.plus + " / −" + change30.minus : "動きなし")) +
-      tile("最新の pH", latest && latest.ph ? num(latest.ph, 1) : '<span class="muted">—</span>', latest && latest.ph ? esc(relative(latest.date)) + "に測定" : "未測定") +
-      tile("最後の水換え", waterChange ? esc(relative(waterChange.date)) : '<span class="muted">—</span>', statusPill(waterChange ? daysSince(waterChange.date) : null)) +
+        (change30.plus || change30.minus ? "＋" + change30.plus + " / −" + change30.minus : "動きなし"), "medaka") +
+      tile("最新の pH", latest && latest.ph ? num(latest.ph, 1) : '<span class="muted">—</span>', latest && latest.ph ? esc(relative(latest.date)) + "に測定" : "未測定", "thermometer") +
+      tile("最後の水換え", waterChange ? esc(relative(waterChange.date)) : '<span class="muted">—</span>', statusPill(waterChange ? daysSince(waterChange.date) : null), "waterchange") +
       tile("水草・設備", activeGearCount() + '<small>点</small>',
-        GEAR_CATEGORIES.map(function (c) { return c.key + " " + gearOf(c.key, false).length; }).join(" ・ ")) +
+        GEAR_CATEGORIES.map(function (c) { return c.key + " " + gearOf(c.key, false).length; }).join(" ・ "), "sprout") +
       "</div>" +
 
       '<div class="card">' +
@@ -707,10 +854,10 @@
     );
   }
 
-  function tile(label, value, meta) {
+  function tile(label, value, meta, iconName) {
     return (
       '<div class="card tile">' +
-      '<div class="tile-label">' + esc(label) + "</div>" +
+      '<div class="tile-label">' + (iconName ? mediaIcon(iconName, 15) : "") + esc(label) + "</div>" +
       '<div class="tile-value">' + value + "</div>" +
       '<div class="tile-meta">' + meta + "</div>" +
       "</div>"
@@ -735,7 +882,7 @@
     var counts = countSeries();
 
     var body = rows.length === 0
-      ? emptyHTML("生き物がまだ登録されていません", "上のフォームから、メダカやドジョウなどを登録してください。")
+      ? emptyHTML("生き物がまだ登録されていません", "上のフォームから、メダカやドジョウなどを登録してください。", "medaka")
       : '<div class="table-wrap"><table>' +
         '<thead><tr><th>種類</th><th>呼び名・系統</th><th class="num">いまの数</th><th>最後の動き</th><th>メモ</th><th></th></tr></thead><tbody>' +
         rows.map(function (c) {
@@ -743,7 +890,8 @@
           var last = evs[evs.length - 1];
           return (
             "<tr>" +
-            '<td data-label="種類"><strong>' + esc(c.species) + "</strong></td>" +
+            '<td data-label="種類"><span class="named">' + mediaIcon(speciesIcon(c.species), 22, "creature-icon") +
+            "<strong>" + esc(c.species) + "</strong></span></td>" +
             '<td data-label="呼び名">' + (c.name ? esc(c.name) : '<span class="muted">—</span>') + "</td>" +
             '<td class="num" data-label="いまの数">' + countOf(c.id) + '<small class="muted"> 匹</small></td>' +
             '<td data-label="最後の動き">' + (last ? esc(eventLine(last)) + '<span class="muted"> ・ ' + esc(relative(last.date)) + "</span>" : '<span class="muted">—</span>') + "</td>" +
@@ -1096,9 +1244,9 @@
   }
 
   function insightIcon(level) {
-    if (level === "good") return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M4.6 9.4 1.5 6.3l1-1 2.1 2.1 5-5 1 1z"/></svg>';
-    if (level === "crit" || level === "warn") return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M6 1 11.5 11h-11z"/></svg>';
-    return '<svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="6" r="5.5"/></svg>';
+    if (level === "good") return mediaIcon("check", 13);
+    if (level === "crit" || level === "warn") return mediaIcon("alert", 13);
+    return mediaIcon("info", 13);
   }
 
   /* --- 相談用の要約 --------------------------------------------------------
@@ -1327,7 +1475,8 @@
       rows.map(function (g) {
         return (
           '<tr' + (g.removedAt ? ' class="is-removed"' : "") + ">" +
-          '<td data-label="名前"><strong>' + esc(g.name) + "</strong>" +
+          '<td data-label="名前"><span class="named">' + mediaIcon(GEAR_ICONS[category] || "dot", 21, "creature-icon") +
+          "<strong>" + esc(g.name) + "</strong></span>" +
           (g.removedAt ? ' <span class="pill">撤去済み</span>' : "") + "</td>" +
           '<td data-label="量">' + (g.amount ? esc(g.amount) : '<span class="muted">—</span>') + "</td>" +
           '<td data-label="設置日">' + esc(fmtLong(g.installedAt)) + "</td>" +
@@ -1362,7 +1511,8 @@
       "<div><span class=\"label\">種別</span>" +
       '<div class="chips" role="group" aria-label="種別">' +
       GEAR_CATEGORIES.map(function (c) {
-        return '<button type="button" class="chip" data-action="gear-category" data-category="' + esc(c.key) + '" aria-pressed="' + (ui.gearCategory === c.key) + '">' + esc(c.key) + "</button>";
+        return '<button type="button" class="chip" data-action="gear-category" data-category="' + esc(c.key) + '" aria-pressed="' + (ui.gearCategory === c.key) + '">' +
+          mediaIcon(GEAR_ICONS[c.key], 17) + esc(c.key) + "</button>";
       }).join("") +
       "</div></div>" +
       '<div class="form-grid">' +
@@ -1377,7 +1527,8 @@
       GEAR_CATEGORIES.map(function (c) {
         var count = gearOf(c.key, false).length;
         return (
-          '<div class="card"><div class="card-head"><span class="card-title">' + esc(c.key) + "</span>" +
+          '<div class="card"><div class="card-head"><span class="card-title with-icon">' +
+          mediaIcon(GEAR_ICONS[c.key], 18) + esc(c.key) + "</span>" +
           '<span class="muted">使用中 ' + count + " 点</span></div>" +
           (gearOf(c.key, ui.showRemoved).length === 0 ? '<div class="card-body">' : "") +
           gearTableHTML(c.key) +
@@ -1394,7 +1545,7 @@
     var rows = measurements();
     var shown = inBand(inRange(rows));
     var table = rows.length === 0
-      ? '<div class="card-body">' + emptyHTML("測定の記録がありません", "水温だけでも記録しておくと、季節ごとの変化が見えるようになります。") + "</div>"
+      ? '<div class="card-body">' + emptyHTML("測定の記録がありません", "水温だけでも記録しておくと、季節ごとの変化が見えるようになります。", "thermometer") + "</div>"
       : '<div class="table-wrap"><table>' +
         '<thead><tr><th>日時</th><th class="num">水温（℃）</th><th class="num">pH</th><th>メモ</th><th></th></tr></thead><tbody>' +
         rows.slice().sort(function (a, b) { return stampOf(b) - stampOf(a); }).map(function (m) {
@@ -1548,7 +1699,7 @@
 
   function timelineHTML(rows, allowDelete) {
     if (rows.length === 0) {
-      return emptyHTML("作業の記録がありません", "餌やりや水換えを記録しておくと、間隔が空いたときに気づけます。");
+      return emptyHTML("作業の記録がありません", "餌やりや水換えを記録しておくと、間隔が空いたときに気づけます。", "topup");
     }
     return (
       '<div class="timeline">' +
@@ -1557,7 +1708,8 @@
           '<div class="timeline-item">' +
           '<div class="timeline-date">' + esc(fmtShort(l.date)) + "<br>" + esc(relative(l.date)) + "</div>" +
           '<div class="timeline-body">' +
-          '<div class="row"><span class="tag" data-type="' + esc(l.type) + '">' + esc(l.type) + "</span>" +
+          '<div class="row"><span class="tag" data-type="' + esc(l.type) + '">' +
+          mediaIcon(LOG_ICONS[l.type] || "dot", 17) + esc(l.type) + "</span>" +
           (allowDelete ? '<button class="btn quiet sm danger" style="margin-left:auto" data-action="del-log" data-id="' + l.id + '">削除</button>' : "") +
           "</div>" +
           (l.note ? '<div class="timeline-memo">' + esc(l.note) + "</div>" : "") +
@@ -1581,7 +1733,8 @@
       '<span class="label">種別</span>' +
       '<div class="chips" role="group" aria-label="作業の種別">' +
       LOG_TYPES.map(function (t) {
-        return '<button type="button" class="chip" data-action="log-type" data-type="' + esc(t) + '" aria-pressed="' + (ui.logType === t) + '">' + esc(t) + "</button>";
+        return '<button type="button" class="chip" data-action="log-type" data-type="' + esc(t) + '" aria-pressed="' + (ui.logType === t) + '">' +
+          mediaIcon(LOG_ICONS[t] || "dot", 17) + esc(t) + "</button>";
       }).join("") +
       "</div></div>" +
       '<div class="form-grid">' +
@@ -1611,9 +1764,10 @@
     });
   }
 
-  function emptyHTML(title, note) {
+  function emptyHTML(title, note, iconName) {
     return (
-      '<div class="empty"><span class="empty-title">' + esc(title) + "</span><p>" + esc(note) + "</p>" +
+      '<div class="empty">' + mediaIcon(iconName || "ripple", 44, "empty-icon") +
+      '<span class="empty-title">' + esc(title) + "</span><p>" + esc(note) + "</p>" +
       '<button class="btn ghost" data-action="sample">サンプルデータで試す</button></div>'
     );
   }
@@ -1641,11 +1795,16 @@
 
   function render() {
     VW = chartWidth();
+    document.documentElement.setAttribute("data-season", season().key);
     var select = document.getElementById("biotope-select");
     select.innerHTML = state.biotopes.map(function (b) {
       return '<option value="' + b.id + '"' + (b.id === state.activeBiotopeId ? " selected" : "") + ">" + esc(b.name) + "</option>";
     }).join("");
 
+    document.querySelectorAll(".nav-icon").forEach(function (span) {
+      if (span.firstChild) return;
+      span.innerHTML = mediaIcon(VIEW_ICONS[span.getAttribute("data-icon")], 19);
+    });
     document.querySelectorAll(".nav-item").forEach(function (btn) {
       var v = btn.getAttribute("data-view");
       if (v === ui.view) {
@@ -1672,6 +1831,17 @@
       dashboardView();
     wireCharts(main);
     wirePhotos(main);
+
+    var canvas = document.getElementById("water-canvas");
+    if (canvas) {
+      var latestTemp = measurements().filter(function (m) {
+        return m.temp !== null && m.temp !== undefined && m.temp !== "";
+      }).slice(-1)[0];
+      startWaterHero(canvas, latestTemp ? latestTemp.temp : 22, totalCount());
+    } else if (waterAnim) {
+      cancelAnimationFrame(waterAnim);
+      waterAnim = null;
+    }
 
     /* 履歴ダイアログを開いたまま記録したときは、その中身も描き直す */
     if (ui.eventCreatureId && document.getElementById("event-dialog").open) renderEventDialog();

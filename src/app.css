@@ -36,6 +36,10 @@
   --sans: system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
     "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
 
+  --water-1: #e8f3ec;
+  --water-2: #bfe0d1;
+  --water-ink: 18, 42, 32;
+
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 14px;
@@ -65,6 +69,10 @@
     --series-2: #d95926;
     --series-3: #199e70;
 
+    --water-1: #16302a;
+    --water-2: #0f2420;
+    --water-ink: 190, 235, 214;
+
     --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -20px rgba(0, 0, 0, 0.9);
   }
@@ -93,9 +101,33 @@
   --series-2: #d95926;
   --series-3: #199e70;
 
+  --water-1: #16302a;
+  --water-2: #0f2420;
+  --water-ink: 190, 235, 214;
+
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -20px rgba(0, 0, 0, 0.9);
 }
+
+/* ---------------------------------------------------------------------------
+   季節。水の色だけを動かす。
+   ボタンなどの色は対比を確かめた値なので触らない。
+--------------------------------------------------------------------------- */
+:root[data-season="spring"] { --water-1: #ecf5e8; --water-2: #c7e3c6; }
+:root[data-season="summer"] { --water-1: #e6f3ec; --water-2: #b4ddcb; }
+:root[data-season="autumn"] { --water-1: #f4f1e4; --water-2: #dcd9bc; }
+:root[data-season="winter"] { --water-1: #eaf1f4; --water-2: #c4dae1; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"])[data-season="spring"] { --water-1: #17301f; --water-2: #102316; }
+  :root:not([data-theme="light"])[data-season="summer"] { --water-1: #16302a; --water-2: #0f2420; }
+  :root:not([data-theme="light"])[data-season="autumn"] { --water-1: #2b2718; --water-2: #1d1a10; }
+  :root:not([data-theme="light"])[data-season="winter"] { --water-1: #172a31; --water-2: #101e23; }
+}
+:root[data-theme="dark"][data-season="spring"] { --water-1: #17301f; --water-2: #102316; }
+:root[data-theme="dark"][data-season="summer"] { --water-1: #16302a; --water-2: #0f2420; }
+:root[data-theme="dark"][data-season="autumn"] { --water-1: #2b2718; --water-2: #1d1a10; }
+:root[data-theme="dark"][data-season="winter"] { --water-1: #172a31; --water-2: #101e23; }
 
 * { box-sizing: border-box; }
 
@@ -229,6 +261,43 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .grow { flex: 1; min-width: 0; }
 .stack { display: flex; flex-direction: column; gap: 16px; }
 
+/* --- 水面カード ---------------------------------------------------------- */
+.water-card { position: relative; overflow: hidden; border-color: transparent; }
+.water-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.water-card .hero {
+  position: relative;
+  min-height: 170px;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  padding: 24px 26px;
+}
+.water-card .hero-value { font-size: 58px; }
+.water-card .hero-label,
+.water-card .hero-meta { color: var(--ink-2); }
+
+.season-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-right: 8px; padding: 1px 9px 1px 7px;
+  border-radius: 999px; background: var(--accent-soft); color: var(--accent);
+  font-weight: 700; font-size: 12px;
+}
+
+/* --- アイコン ------------------------------------------------------------ */
+.icon { display: inline-block; vertical-align: -0.18em; flex: none; }
+.nav-icon { display: inline-flex; color: var(--muted); }
+.nav-item:hover .nav-icon { color: var(--ink-2); }
+.nav-item[aria-current="page"] .nav-icon { color: var(--accent); }
+
+.named { display: inline-flex; align-items: center; gap: 9px; }
+.creature-icon { color: var(--accent); opacity: 0.85; }
+.card-title.with-icon { display: inline-flex; align-items: center; gap: 7px; }
+.card-title.with-icon .icon { color: var(--accent); }
+.tile-label { display: flex; align-items: center; gap: 5px; }
+.tile-label .icon { color: var(--accent); opacity: 0.75; }
+.empty-icon { color: var(--line); margin-bottom: 2px; }
+
 /* --- 数値タイル ---------------------------------------------------------- */
 .hero {
   display: flex; align-items: flex-end; justify-content: space-between; gap: 24px;
@@ -252,7 +321,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   background: var(--surface-2); color: var(--ink-2);
   font-size: 11px; font-weight: 700; letter-spacing: 0.02em;
 }
-.pill svg { display: block; }
+.pill svg { display: block; flex: none; }
 .pill.is-good { color: var(--good); }
 .pill.is-warn { color: #8a5b00; background: #fdf1d6; }
 .pill.is-crit { color: var(--crit); }
@@ -302,17 +371,18 @@ tbody tr.is-removed strong { font-weight: 500; }
 .timeline-memo { color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
 
 .tag {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: 5px;
   font-size: 12px; font-weight: 700;
 }
-.tag::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--line); }
-.tag[data-type="餌やり"]::before { background: var(--series-2); }
-.tag[data-type="水換え"]::before { background: var(--series-1); }
-.tag[data-type="足し水"]::before { background: #1baf7a; }
-.tag[data-type="掃除"]::before { background: #eda100; }
-.tag[data-type="観察"]::before { background: #4a3aa7; }
+.tag .icon { color: var(--line); }
+.tag[data-type="餌やり"] .icon { color: var(--series-2); }
+.tag[data-type="水換え"] .icon { color: var(--series-1); }
+.tag[data-type="足し水"] .icon { color: var(--series-3); }
+.tag[data-type="掃除"] .icon { color: #b07d00; }
+.tag[data-type="観察"] .icon { color: #6a5ad0; }
 
 /* 増減の出来事。増える/減るを色だけに頼らず、文字にも ＋ / − を出している */
+.tag[data-kind]::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none; }
 .tag[data-kind="導入"]::before { background: var(--series-1); }
 .tag[data-kind="繁殖"]::before { background: var(--series-3); }
 .tag[data-kind="死亡"]::before { background: var(--crit); }
@@ -321,11 +391,15 @@ tbody tr.is-removed strong { font-weight: 500; }
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
+  display: inline-flex; align-items: center; gap: 5px;
   padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px;
   background: var(--surface); color: var(--ink-2); cursor: pointer; font-size: 13px;
 }
 .chip:hover { border-color: var(--ink-2); color: var(--ink); }
 .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.chip .icon { color: var(--muted); }
+.chip:hover .icon { color: var(--ink-2); }
+.chip[aria-pressed="true"] .icon { color: var(--accent); }
 
 /* --- 写真 ---------------------------------------------------------------- */
 .thumbs {

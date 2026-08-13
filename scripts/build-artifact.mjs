@@ -12,12 +12,13 @@ const read = (p) => readFile(resolve(root, p), "utf8");
 
 const html = await read("index.html");
 const css = await read("src/app.css");
+const icons = await read("src/icons.js");
 const js = await read("src/app.js");
 
 const title = html.match(/<title>([\s\S]*?)<\/title>/)[1].trim();
 const body = html
   .match(/<body>([\s\S]*)<\/body>/)[1]
-  .replace(/\s*<script src="src\/app\.js"><\/script>\s*/, "\n")
+  .replace(/\s*<script src="src\/(icons|app)\.js"><\/script>\s*/g, "\n")
   .trim();
 
 const out = `<title>${title}</title>
@@ -26,6 +27,7 @@ ${css.trim()}
 </style>
 ${body}
 <script>
+${icons.trim()}
 ${js.trim()}
 </script>
 `;
@@ -33,6 +35,7 @@ ${js.trim()}
 /* ダブルクリックで開ける 1 ファイル版も出す */
 const standalone = html
   .replace('<link rel="stylesheet" href="src/app.css">', `<style>\n${css.trim()}\n</style>`)
+  .replace('<script src="src/icons.js"></script>', `<script>\n${icons.trim()}\n</script>`)
   .replace('<script src="src/app.js"></script>', `<script>\n${js.trim()}\n</script>`);
 
 await mkdir(resolve(root, "dist"), { recursive: true });
