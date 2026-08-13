@@ -462,7 +462,8 @@
   var ui = {
     view: "dashboard", range: 90, logType: "餌やり",
     eventCreatureId: null, eventKind: "繁殖", photoId: null,
-    gearCategory: "水草", showRemoved: false, band: "all"
+    gearCategory: "水草", showRemoved: false, band: "all",
+    editing: null
   };
   var undoSnapshot = null;
 
@@ -716,7 +717,9 @@
     render();
   }
 
-  function removeWithUndo(message, fn) {
+  /* 消すときも直すときも、前の状態は一度きり戻せるようにする。
+     上書きは黙って前の値を捨てるので、削除と同じくらい取り返しがつかない */
+  function withUndo(message, fn) {
     undoSnapshot = JSON.stringify(state);
     commit(fn);
     toast(message, "元に戻す", function () {
@@ -1044,6 +1047,7 @@
             '<td class="memo">' + (c.note ? esc(c.note) : "") + "</td>" +
             '<td class="actions-cell nowrap">' +
             '<button class="btn ghost sm" data-action="history" data-id="' + c.id + '">増減を記録</button> ' +
+            editButton("creature", c.id) + " " +
             '<button class="btn quiet sm danger" data-action="del-creature" data-id="' + c.id + '">削除</button>' +
             "</td></tr>"
           );
@@ -1159,6 +1163,173 @@
         : "記録そのものは残りますが、写真はページを閉じると消えます。画像の保存先（IndexedDB）がこの表示では使えないためです。") +
       "<br>このページを新しいタブで直接開くか、1ファイル版を保存してブラウザで開くと、すべて保存されます。</p></div></div>"
     );
+  }
+
+  /* --- 記録を直す ----------------------------------------------------------
+     打ち間違いは必ず起きる。消して入れ直す作りだと、合っていた日付やメモまで
+     打ち直すことになり、直すより諦めるほうが早くなる。そうして残った
+     間違いは、あとで推移を読むときに効いてくる。
+
+     直す画面は、足すときのフォームと同じ言葉・同じ並びにする。
+     覚え直すことを増やさないため。
+  ------------------------------------------------------------------------- */
+
+  function recordsOf(kind) {
+    return {
+      measurement: state.measurements, log: state.logs,
+      creature: state.creatures, gear: state.gear, photo: state.photos
+    }[kind] || [];
+  }
+
+  function findRecord(kind, id) {
+    return recordsOf(kind).filter(function (r) { return r.id === id; })[0] || null;
+  }
+
+  /* 種別はチップではなく select にする。チップは選択状態を別に持つ必要があり、
+     開いてすぐ閉じる画面には重い */
+  function selectHTML(name, options, current) {
+    return (
+      '<select class="select" name="' + name + '">' +
+      options.map(function (o) {
+        return '<option value="' + esc(o) + '"' + (o === current ? " selected" : "") + ">" + esc(o) + "</option>";
+      }).join("") +
+      "</select>"
+    );
+  }
+
+  function valueOf(row, key) {
+    return esc(hasValue(row, key) ? row[key] : "");
+  }
+
+  var EDIT_FORMS = {
+    measurement: {
+      title: "測定を直す",
+      check: function (get) {
+        return get("temp") === "" && get("ph") === "" ? "水温か pH のどちらかを入力してください" : null;
+      },
+      body: function (r) {
+        return (
+          '<div class="form-grid">' +
+          field("日付", '<input class="input" name="date" type="date" value="' + valueOf(r, "date") + '" required>') +
+          field("時刻", '<input class="input" name="time" type="time" value="' + valueOf(r, "time") + '">') +
+          field("水温（℃）", '<input class="input" name="temp" type="number" step="0.1" value="' + valueOf(r, "temp") + '">') +
+          field("pH", '<input class="input" name="ph" type="number" step="0.1" min="0" max="14" value="' + valueOf(r, "ph") + '">') +
+          '<div class="wide">' + field("メモ", '<input class="input" name="note" value="' + valueOf(r, "note") + '">') + "</div>" +
+          "</div>"
+        );
+      },
+      apply: function (r, get) {
+        r.date = get("date");
+        /* 空にしたら「時刻不明」に戻す。もっともらしい時刻を作らないのは記録するときと同じ */
+        r.time = get("time") || null;
+        r.temp = get("temp") === "" ? null : Number(get("temp"));
+        r.ph = get("ph") === "" ? null : Number(get("ph"));
+        r.note = get("note");
+      }
+    },
+
+    log: {
+      title: "作業ログを直す",
+      body: function (r) {
+        return (
+          '<div class="form-grid">' +
+          field("日付", '<input class="input" name="date" type="date" value="' + valueOf(r, "date") + '" required>') +
+          field("種別", selectHTML("type", LOG_TYPES, r.type)) +
+          '<div class="wide">' + field("メモ", '<input class="input" name="note" value="' + valueOf(r, "note") + '">') + "</div>" +
+          "</div>"
+        );
+      },
+      apply: function (r, get) {
+        r.date = get("date");
+        r.type = get("type");
+        r.note = get("note");
+      }
+    },
+
+    creature: {
+      title: "生き物を直す",
+      note: "いまの数は増減の記録から計算しています。ここでは変わりません。",
+      body: function (r) {
+        return (
+          '<div class="form-grid">' +
+          field("種類", '<input class="input" name="species" value="' + valueOf(r, "species") + '" required>') +
+          field("呼び名・系統", '<input class="input" name="name" value="' + valueOf(r, "name") + '">') +
+          field("導入日", '<input class="input" name="introducedAt" type="date" value="' + valueOf(r, "introducedAt") + '">') +
+          '<div class="wide">' + field("メモ", '<input class="input" name="note" value="' + valueOf(r, "note") + '">') + "</div>" +
+          "</div>"
+        );
+      },
+      apply: function (r, get) {
+        r.species = get("species");
+        r.name = get("name");
+        r.introducedAt = get("introducedAt");
+        r.note = get("note");
+      }
+    },
+
+    gear: {
+      title: "水草・設備を直す",
+      body: function (r) {
+        return (
+          '<div class="form-grid">' +
+          field("種別", selectHTML("category", GEAR_CATEGORIES.map(function (c) { return c.key; }), r.category)) +
+          field("名前", '<input class="input" name="name" value="' + valueOf(r, "name") + '" required>') +
+          field("量", '<input class="input" name="amount" value="' + valueOf(r, "amount") + '">') +
+          field("設置日", '<input class="input" name="installedAt" type="date" value="' + valueOf(r, "installedAt") + '" required>') +
+          /* 撤去日は撤去したものにだけ出す。使っているものに空欄を見せても迷うだけ */
+          (r.removedAt ? field("撤去日", '<input class="input" name="removedAt" type="date" value="' + valueOf(r, "removedAt") + '" required>') : "") +
+          '<div class="wide">' + field("メモ", '<input class="input" name="note" value="' + valueOf(r, "note") + '">') + "</div>" +
+          "</div>"
+        );
+      },
+      apply: function (r, get) {
+        r.category = get("category");
+        r.name = get("name");
+        r.amount = get("amount");
+        r.installedAt = get("installedAt");
+        if (r.removedAt) r.removedAt = get("removedAt") || r.removedAt;
+        r.note = get("note");
+      }
+    },
+
+    photo: {
+      title: "写真の記録を直す",
+      note: "画像そのものは変わりません。撮影日と説明だけを直します。",
+      body: function (r) {
+        return (
+          '<div class="form-grid">' +
+          field("撮影日", '<input class="input" name="date" type="date" value="' + valueOf(r, "date") + '" required>') +
+          '<div class="wide">' + field("説明", '<input class="input" name="caption" value="' + valueOf(r, "caption") + '">') + "</div>" +
+          "</div>"
+        );
+      },
+      apply: function (r, get) {
+        r.date = get("date");
+        r.caption = get("caption");
+      }
+    }
+  };
+
+  /** 一覧の操作列に置く「直す」。削除と同じ場所にあれば探さなくていい */
+  function editButton(kind, id) {
+    return '<button class="btn quiet sm" data-action="edit" data-kind="' + kind + '" data-id="' + id + '">直す</button>';
+  }
+
+  function renderEditDialog() {
+    var host = document.getElementById("edit-dialog-body");
+    var spec = ui.editing ? EDIT_FORMS[ui.editing.kind] : null;
+    var rec = ui.editing ? findRecord(ui.editing.kind, ui.editing.id) : null;
+    if (!spec || !rec) { host.innerHTML = ""; return; }
+
+    host.innerHTML =
+      '<h2 class="dialog-title">' + esc(spec.title) + "</h2>" +
+      (spec.note ? '<p class="muted" style="margin:0; font-size:13px">' + esc(spec.note) + "</p>" : "") +
+      '<form id="edit-form" class="stack">' +
+      spec.body(rec) +
+      '<div class="form-actions">' +
+      '<button class="btn ghost" type="button" data-action="close-dialog">やめる</button>' +
+      '<button class="btn" type="submit">直す</button></div>' +
+      "</form>";
   }
 
   /* --- 気づき --------------------------------------------------------------
@@ -1649,6 +1820,7 @@
           (g.removedAt
             ? '<button class="btn ghost sm" data-action="restore-gear" data-id="' + g.id + '">使用中に戻す</button> '
             : '<button class="btn ghost sm" data-action="remove-gear" data-id="' + g.id + '">撤去した</button> ') +
+          editButton("gear", g.id) + " " +
           '<button class="btn quiet sm danger" data-action="del-gear" data-id="' + g.id + '">削除</button>' +
           "</td></tr>"
         );
@@ -1720,7 +1892,8 @@
             '<td class="num" data-label="水温">' + (m.temp === "" || m.temp === null || m.temp === undefined ? '<span class="muted">—</span>' : num(m.temp) + " ℃") + "</td>" +
             '<td class="num" data-label="pH">' + (m.ph === "" || m.ph === null || m.ph === undefined ? '<span class="muted">—</span>' : num(m.ph, 1)) + "</td>" +
             '<td class="memo">' + (m.note ? esc(m.note) : "") + "</td>" +
-            '<td class="actions-cell"><button class="btn quiet sm danger" data-action="del-measurement" data-id="' + m.id + '">削除</button></td>' +
+            '<td class="actions-cell nowrap">' + editButton("measurement", m.id) + " " +
+            '<button class="btn quiet sm danger" data-action="del-measurement" data-id="' + m.id + '">削除</button></td>' +
             "</tr>"
           );
         }).join("") +
@@ -1927,6 +2100,7 @@
       "</div></div>" +
       '<div class="form-actions">' +
       '<button class="btn quiet danger" type="button" data-action="del-photo" data-id="' + p.id + '">この写真を削除</button>' +
+      editButton("photo", p.id) +
       '<button class="btn ghost" type="button" data-action="close-dialog">閉じる</button></div>';
     wirePhotos(host);
   }
@@ -1946,7 +2120,10 @@
           '<div class="timeline-body">' +
           '<div class="row"><span class="tag" data-type="' + esc(l.type) + '">' +
           mediaIcon(LOG_ICONS[l.type] || "dot", 17) + esc(l.type) + "</span>" +
-          (allowDelete ? '<button class="btn quiet sm danger" style="margin-left:auto" data-action="del-log" data-id="' + l.id + '">削除</button>' : "") +
+          (allowDelete
+            ? '<span class="row" style="margin-left:auto; gap:4px">' + editButton("log", l.id) +
+              '<button class="btn quiet sm danger" data-action="del-log" data-id="' + l.id + '">削除</button></span>'
+            : "") +
           "</div>" +
           (l.note ? '<div class="timeline-memo">' + esc(l.note) + "</div>" : "") +
           thumbsHTML(photosOfLog(l.id)) +
@@ -2310,24 +2487,24 @@
       if (amountLabel) amountLabel.textContent = kindOf(ui.eventKind).sign === 0 ? "数えた匹数" : "匹数";
     } else if (action === "del-event") {
       var eid = el.getAttribute("data-id");
-      removeWithUndo("増減の記録を削除しました", function () {
+      withUndo("増減の記録を削除しました", function () {
         state.events = state.events.filter(function (e) { return e.id !== eid; });
       });
     } else if (action === "del-creature") {
       var did = el.getAttribute("data-id");
-      removeWithUndo("生き物と、その増減の記録を削除しました", function () {
+      withUndo("生き物と、その増減の記録を削除しました", function () {
         state.creatures = state.creatures.filter(function (c) { return c.id !== did; });
         state.events = state.events.filter(function (e) { return e.creatureId !== did; });
       });
     } else if (action === "del-measurement") {
       var mid = el.getAttribute("data-id");
-      removeWithUndo("測定を削除しました", function () {
+      withUndo("測定を削除しました", function () {
         state.measurements = state.measurements.filter(function (m) { return m.id !== mid; });
       });
     } else if (action === "del-log") {
       var lid = el.getAttribute("data-id");
       var attached = photosOfLog(lid).length;
-      removeWithUndo(
+      withUndo(
         attached ? "作業ログを削除しました（写真は「写真」に残ります）" : "作業ログを削除しました",
         function () {
           state.logs = state.logs.filter(function (l) { return l.id !== lid; });
@@ -2373,9 +2550,17 @@
       });
     } else if (action === "del-gear") {
       var dgid = el.getAttribute("data-id");
-      removeWithUndo("記録を削除しました", function () {
+      withUndo("記録を削除しました", function () {
         state.gear = state.gear.filter(function (g) { return g.id !== dgid; });
       });
+    } else if (action === "edit") {
+      /* 写真の画面のように、開いているダイアログから押されることがある。
+         入れ子で重ねずに、いま開いているものを閉じてから出す */
+      var open = el.closest("dialog");
+      if (open) open.close();
+      ui.editing = { kind: el.getAttribute("data-kind"), id: el.getAttribute("data-id") };
+      renderEditDialog();
+      document.getElementById("edit-dialog").showModal();
     } else if (action === "photo") {
       ui.photoId = el.getAttribute("data-id");
       renderPhotoDialog();
@@ -2488,6 +2673,15 @@
       document.getElementById("biotope-dialog").close();
       form.reset();
       toast("「" + name + "」を追加しました");
+    } else if (form.id === "edit-form") {
+      var spec = ui.editing ? EDIT_FORMS[ui.editing.kind] : null;
+      var target = ui.editing ? findRecord(ui.editing.kind, ui.editing.id) : null;
+      if (!spec || !target) { toast("この記録は見つかりませんでした"); return; }
+      var problem = spec.check ? spec.check(get) : null;
+      if (problem) { toast(problem); return; }
+      withUndo("直しました", function () { spec.apply(target, get); });
+      document.getElementById("edit-dialog").close();
+      ui.editing = null;
     } else if (form.id === "restore-form") {
       var text = document.getElementById("backup-text").value;
       try {
@@ -2501,6 +2695,7 @@
         state = normalize(next);
         ui.eventCreatureId = null;
         ui.photoId = null;
+        ui.editing = null;
         save();
         render();
         document.getElementById("backup-dialog").close();
