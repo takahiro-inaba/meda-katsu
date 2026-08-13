@@ -31,6 +31,7 @@
       <button class="nav-item" data-action="view" data-view="creatures">生き物<span class="nav-count" data-count="creatures"></span></button>
       <button class="nav-item" data-action="view" data-view="water">水質<span class="nav-count" data-count="water"></span></button>
       <button class="nav-item" data-action="view" data-view="logs">作業ログ<span class="nav-count" data-count="logs"></span></button>
+      <button class="nav-item" data-action="view" data-view="photos">写真<span class="nav-count" data-count="photos"></span></button>
     </nav>
 
     <div class="sidebar-foot">
@@ -56,6 +57,10 @@
   </form>
 </dialog>
 
+<dialog id="photo-dialog">
+  <div class="dialog-body" id="photo-dialog-body"></div>
+</dialog>
+
 <dialog id="event-dialog">
   <div class="dialog-body" id="event-dialog-body"></div>
 </dialog>
@@ -65,6 +70,7 @@
     <h2 class="dialog-title">バックアップ / 復元</h2>
     <p class="muted" style="margin:0; font-size:13px">
       下の JSON をコピーして保管しておけば、別のブラウザでも貼り付けて復元できます。
+      写真は容量が大きいため含まれません（この端末に残ります）。
     </p>
     <textarea class="textarea" id="backup-text" rows="10" spellcheck="false" style="font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px"></textarea>
     <div class="form-actions">

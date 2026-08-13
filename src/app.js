@@ -35,29 +35,30 @@
   function emptyState() {
     var id = uid();
     return {
-      version: 2,
+      version: 3,
       activeBiotopeId: id,
       biotopes: [{ id: id, name: "メインのビオトープ", startedAt: today(), note: "" }],
       creatures: [],
       events: [],
       measurements: [],
-      logs: []
+      logs: [],
+      photos: []
     };
   }
 
-  /* v1 は数を直接持っていたので、その数を「導入」の出来事に読み替える */
   function migrate(data) {
-    if (data.version >= 2) return data;
-    data.events = data.events || [];
-    data.creatures.forEach(function (c) {
-      data.events.push({
-        id: uid(), biotopeId: c.biotopeId, creatureId: c.id,
-        date: c.introducedAt || today(), kind: "導入",
-        amount: Number(c.count) || 0, note: "以前の記録から引き継ぎ"
+    /* v1 は数を直接持っていたので、その数を「導入」の出来事に読み替える */
+    if (data.version < 2) {
+      data.creatures.forEach(function (c) {
+        data.events.push({
+          id: uid(), biotopeId: c.biotopeId, creatureId: c.id,
+          date: c.introducedAt || today(), kind: "導入",
+          amount: Number(c.count) || 0, note: "以前の記録から引き継ぎ"
+        });
+        delete c.count;
       });
-      delete c.count;
-    });
-    data.version = 2;
+    }
+    data.version = 3;
     return data;
   }
 
@@ -71,6 +72,7 @@
       data.events = data.events || [];
       data.measurements = data.measurements || [];
       data.logs = data.logs || [];
+      data.photos = data.photos || [];
       data = migrate(data);
       if (!data.biotopes.some(function (b) { return b.id === data.activeBiotopeId; })) {
         data.activeBiotopeId = data.biotopes[0].id;
@@ -90,8 +92,74 @@
     }
   }
 
+  /* --- 写真の保管庫 --------------------------------------------------------
+     写真は localStorage に入らない（全体で 5MB 程度しかない）。
+     記録の JSON は localStorage、画像そのものは IndexedDB に置く。
+  ------------------------------------------------------------------------- */
+
+  var DB_NAME = "meda-katsu";
+  var PHOTO_STORE = "photos";
+  var dbPromise = null;
+  var photoUrls = {}; // id → objectURL。作り直すと ちらつくので使い回す
+
+  function db() {
+    if (!dbPromise) {
+      dbPromise = new Promise(function (resolve, reject) {
+        var req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = function () { req.result.createObjectStore(PHOTO_STORE); };
+        req.onsuccess = function () { resolve(req.result); };
+        req.onerror = function () { reject(req.error); };
+      });
+    }
+    return dbPromise;
+  }
+
+  function photoTx(mode, fn) {
+    return db().then(function (d) {
+      return new Promise(function (resolve, reject) {
+        var tx = d.transaction(PHOTO_STORE, mode);
+        var req = fn(tx.objectStore(PHOTO_STORE));
+        tx.oncomplete = function () { resolve(req ? req.result : undefined); };
+        tx.onerror = function () { reject(tx.error); };
+        tx.onabort = function () { reject(tx.error); };
+      });
+    });
+  }
+
+  function putPhotoBlob(id, blob) { return photoTx("readwrite", function (s) { return s.put(blob, id); }); }
+  function getPhotoBlob(id) { return photoTx("readonly", function (s) { return s.get(id); }); }
+
+  function dropPhotoBlobs(ids) {
+    if (ids.length === 0) return Promise.resolve();
+    ids.forEach(function (id) {
+      if (photoUrls[id]) { URL.revokeObjectURL(photoUrls[id]); delete photoUrls[id]; }
+    });
+    return photoTx("readwrite", function (s) { ids.forEach(function (id) { s.delete(id); }); });
+  }
+
+  /** 端末の写真は数MBある。長辺 1600px の JPEG に縮めてから保存する。 */
+  function shrink(file) {
+    var MAX_EDGE = 1600;
+    return createImageBitmap(file, { imageOrientation: "from-image" }).then(function (bmp) {
+      var scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+      var w = Math.round(bmp.width * scale);
+      var h = Math.round(bmp.height * scale);
+      var canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(bmp, 0, 0, w, h);
+      bmp.close();
+      return new Promise(function (resolve) {
+        canvas.toBlob(function (blob) { resolve({ blob: blob, w: w, h: h }); }, "image/jpeg", 0.82);
+      });
+    });
+  }
+
   var state = load();
-  var ui = { view: "dashboard", range: 90, logType: "餌やり", eventCreatureId: null, eventKind: "繁殖" };
+  var ui = {
+    view: "dashboard", range: 90, logType: "餌やり",
+    eventCreatureId: null, eventKind: "繁殖", photoId: null
+  };
   var undoSnapshot = null;
 
   /* --- 日付・数値 --------------------------------------------------------- */
@@ -228,6 +296,42 @@
       else if (sign < 0) minus += Number(e.amount) || 0;
     });
     return { plus: plus, minus: minus };
+  }
+
+  function photos() { return mine(state.photos).slice().sort(byDateDesc); }
+
+  function photosOfLog(logId) {
+    return state.photos.filter(function (p) { return p.logId === logId; });
+  }
+
+  /** 端末から選ばれた画像を縮めて保管し、記録に加える */
+  function addPhotos(files, meta) {
+    var list = Array.prototype.slice.call(files).filter(function (f) { return /^image\//.test(f.type); });
+    if (list.length === 0) return Promise.resolve(0);
+    toast(list.length + " 枚を取り込んでいます…");
+
+    return Promise.all(list.map(function (file) {
+      return shrink(file).then(function (out) {
+        var id = uid();
+        return putPhotoBlob(id, out.blob).then(function () {
+          return {
+            id: id, biotopeId: state.activeBiotopeId,
+            date: meta.date || today(), caption: meta.caption || "",
+            logId: meta.logId || null, w: out.w, h: out.h, bytes: out.blob.size
+          };
+        });
+      });
+    })).then(function (records) {
+      state.photos = state.photos.concat(records);
+      save();
+      render();
+      toast(records.length + " 枚を取り込みました");
+      return records.length;
+    }).catch(function (err) {
+      console.warn("写真の取り込みに失敗", err);
+      toast("写真を取り込めませんでした。保存容量が足りないかもしれません。");
+      return 0;
+    });
   }
 
   function creatureById(id) {
@@ -453,6 +557,12 @@
       '<div class="card-body">' + lineChartHTML(seriesOf(temps, "temp"), "var(--series-1)", "℃", 1) + "</div>" +
       "</div>" +
 
+      (photos().length
+        ? '<div class="card"><div class="card-head"><span class="card-title">最近の写真</span>' +
+          '<button class="btn quiet" data-action="view" data-view="photos">すべて見る</button></div>' +
+          '<div class="card-body">' + thumbsHTML(photos().slice(0, 5)) + "</div></div>"
+        : "") +
+
       '<div class="card">' +
       '<div class="card-head"><span class="card-title">最近の作業</span><button class="btn quiet" data-action="view" data-view="logs">すべて見る</button></div>' +
       '<div class="card-body">' + timelineHTML(logs().slice(0, 6), false) + "</div>" +
@@ -592,8 +702,8 @@
       "</div></div>" +
       '<div class="form-grid">' +
       field("日付", '<input class="input" name="date" type="date" value="' + today() + '" required>') +
-      field(k.sign === 0 ? "数えた匹数" : "匹数", '<input class="input" name="amount" type="number" min="0" step="1" value="1" required>') +
-      '<div class="wide">' + field("メモ", '<input class="input" name="note" placeholder="' + (k.sign === 0 ? "エビは正確に数えられないので概算。" : "水草に卵。稚魚を確認。") + '">') + "</div>" +
+      field(k.sign === 0 ? "数えた匹数" : "匹数", '<input class="input" name="amount" type="number" min="0" step="1" value="1" required>', "amount-label") +
+      '<div class="wide">' + field("メモ", '<input class="input" name="note" placeholder="水草に卵。稚魚を確認。">') + "</div>" +
       "</div>" +
       '<div class="form-actions"><button class="btn ghost" type="button" data-action="close-dialog">閉じる</button>' +
       '<button class="btn" type="submit">記録する</button></div>' +
@@ -654,6 +764,100 @@
     );
   }
 
+  /* --- 写真 ---------------------------------------------------------------- */
+
+  /** 画像は IndexedDB にあるので src は後から差し込む */
+  function wirePhotos(root) {
+    root.querySelectorAll("img[data-photo]").forEach(function (img) {
+      var id = img.getAttribute("data-photo");
+      if (photoUrls[id]) { img.src = photoUrls[id]; return; }
+      getPhotoBlob(id).then(function (blob) {
+        if (!blob) return;
+        photoUrls[id] = URL.createObjectURL(blob);
+        img.src = photoUrls[id];
+      });
+    });
+  }
+
+  function thumbsHTML(list) {
+    if (list.length === 0) return "";
+    return (
+      '<div class="thumbs">' +
+      list.map(function (p) {
+        return (
+          '<button type="button" class="thumb" data-action="photo" data-id="' + p.id + '">' +
+          '<img data-photo="' + p.id + '" alt="' + esc(p.caption || fmtLong(p.date) + "の写真") + '" loading="lazy">' +
+          "</button>"
+        );
+      }).join("") +
+      "</div>"
+    );
+  }
+
+  function photosView() {
+    var rows = photos();
+    var months = [];
+    var byMonth = {};
+    rows.forEach(function (p) {
+      var key = p.date.slice(0, 7);
+      if (!byMonth[key]) { byMonth[key] = []; months.push(key); }
+      byMonth[key].push(p);
+    });
+
+    var gallery = rows.length === 0
+      ? '<div class="empty"><span class="empty-title">写真がありません</span>' +
+        "<p>同じ場所を撮りためると、水草の茂りかたや水の色の変化が後から見返せます。</p></div>"
+      : months.map(function (key) {
+          var parts = key.split("-");
+          return (
+            '<section class="month">' +
+            '<h3 class="month-head">' + Number(parts[0]) + "年" + Number(parts[1]) + "月" +
+            '<span class="muted"> ・ ' + byMonth[key].length + " 枚</span></h3>" +
+            thumbsHTML(byMonth[key]) +
+            "</section>"
+          );
+        }).join("");
+
+    return (
+      '<div class="page-head"><div><h1 class="page-title">写真</h1>' +
+      '<p class="page-note">' + rows.length + " 枚。長辺 1600px の JPEG に縮めて、この端末の中に保存しています。</p></div></div>" +
+
+      '<div class="card"><div class="card-head"><span class="card-title">写真を追加</span></div><div class="card-body">' +
+      '<form id="photo-form" class="stack">' +
+      '<div class="form-grid">' +
+      field("撮影日", '<input class="input" name="date" type="date" value="' + today() + '" required>') +
+      field("説明", '<input class="input" name="caption" placeholder="睡蓮が咲いた。">') +
+      '<div class="wide">' + field("画像ファイル", '<input class="input" name="files" type="file" accept="image/*" multiple required>') + "</div>" +
+      "</div>" +
+      '<div class="form-actions"><button class="btn" type="submit">取り込む</button></div>' +
+      "</form></div></div>" +
+
+      '<div class="card"><div class="card-head"><span class="card-title">これまでの写真</span>' +
+      '<span class="muted">新しい順</span></div>' +
+      '<div class="card-body gallery">' + gallery + "</div></div>"
+    );
+  }
+
+  function renderPhotoDialog() {
+    var p = state.photos.filter(function (x) { return x.id === ui.photoId; })[0];
+    var host = document.getElementById("photo-dialog-body");
+    if (!p) { host.innerHTML = ""; return; }
+    var log = p.logId ? state.logs.filter(function (l) { return l.id === p.logId; })[0] : null;
+
+    host.innerHTML =
+      '<img class="lightbox-img" data-photo="' + p.id + '" alt="' + esc(p.caption || fmtLong(p.date) + "の写真") + '">' +
+      '<div class="row" style="justify-content:space-between">' +
+      "<div><strong>" + esc(fmtLong(p.date)) + "</strong>" +
+      '<span class="muted"> ・ ' + esc(relative(p.date)) + (log ? " ・ " + esc(log.type) : "") + "</span>" +
+      (p.caption ? '<div class="muted">' + esc(p.caption) + "</div>" : "") +
+      '<div class="muted" style="font-size:11px">' + p.w + " × " + p.h + " ・ " + Math.round((p.bytes || 0) / 1024) + " KB</div>" +
+      "</div></div>" +
+      '<div class="form-actions">' +
+      '<button class="btn quiet danger" type="button" data-action="del-photo" data-id="' + p.id + '">この写真を削除</button>' +
+      '<button class="btn ghost" type="button" data-action="close-dialog">閉じる</button></div>';
+    wirePhotos(host);
+  }
+
   /* --- 画面: 作業ログ ------------------------------------------------------ */
 
   function timelineHTML(rows, allowDelete) {
@@ -671,6 +875,7 @@
           (allowDelete ? '<button class="btn quiet sm danger" style="margin-left:auto" data-action="del-log" data-id="' + l.id + '">削除</button>' : "") +
           "</div>" +
           (l.note ? '<div class="timeline-memo">' + esc(l.note) + "</div>" : "") +
+          thumbsHTML(photosOfLog(l.id)) +
           "</div></div>"
         );
       }).join("") +
@@ -696,6 +901,7 @@
       '<div class="form-grid">' +
       field("日付", '<input class="input" name="date" type="date" value="' + today() + '" required>') +
       '<div class="wide">' + field("メモ", '<input class="input" name="note" placeholder="1/3 換水。カルキ抜き済み。">') + "</div>" +
+      '<div class="wide">' + field("写真（任意・複数可）", '<input class="input" name="files" type="file" accept="image/*" multiple>') + "</div>" +
       "</div>" +
       '<div class="form-actions"><button class="btn" type="submit">記録する</button></div>' +
       "</form></div></div>" +
@@ -707,8 +913,16 @@
 
   /* --- 共通の部品 ---------------------------------------------------------- */
 
-  function field(label, control) {
-    return '<label><span class="label">' + esc(label) + "</span>" + control + "</label>";
+  function field(label, control, labelId) {
+    return '<label><span class="label"' + (labelId ? ' id="' + labelId + '"' : "") + ">" +
+      esc(label) + "</span>" + control + "</label>";
+  }
+
+  /** チップ群の選択状態だけを更新する（描き直すと入力が消えるため） */
+  function setPressed(action, attr, value) {
+    document.querySelectorAll('[data-action="' + action + '"]').forEach(function (btn) {
+      btn.setAttribute("aria-pressed", String(btn.getAttribute(attr) === value));
+    });
   }
 
   function emptyHTML(title, note) {
@@ -753,14 +967,17 @@
     document.querySelector('[data-count="creatures"]').textContent = creatures().length || "";
     document.querySelector('[data-count="water"]').textContent = mine(state.measurements).length || "";
     document.querySelector('[data-count="logs"]').textContent = mine(state.logs).length || "";
+    document.querySelector('[data-count="photos"]').textContent = mine(state.photos).length || "";
 
     var main = document.getElementById("main");
     main.innerHTML =
       ui.view === "creatures" ? creaturesView() :
       ui.view === "water" ? waterView() :
       ui.view === "logs" ? logsView() :
+      ui.view === "photos" ? photosView() :
       dashboardView();
     wireCharts(main);
+    wirePhotos(main);
 
     /* 履歴ダイアログを開いたまま記録したときは、その中身も描き直す */
     if (ui.eventCreatureId && document.getElementById("event-dialog").open) renderEventDialog();
@@ -841,7 +1058,69 @@
       }));
       state.biotopes.forEach(function (b) { if (b.id === bid) b.startedAt = dateAt(0); });
     });
-    toast("サンプルデータを入れました");
+    addSamplePhotos(dateAt);
+  }
+
+  /**
+   * サンプル用の画像。手元に写真がなくてもギャラリーの動きが見えるように、
+   * 水面を模した絵をその場で描く（実際の写真ではないことは説明文に出す）。
+   */
+  function drawSamplePhoto(hue, leaves) {
+    var c = document.createElement("canvas");
+    c.width = 800;
+    c.height = 600;
+    var g = c.getContext("2d");
+
+    var grad = g.createLinearGradient(0, 0, 0, 600);
+    grad.addColorStop(0, "hsl(" + hue + ", 32%, 26%)");
+    grad.addColorStop(1, "hsl(" + (hue + 18) + ", 38%, 14%)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 800, 600);
+
+    g.strokeStyle = "rgba(255,255,255,0.10)";
+    g.lineWidth = 2;
+    for (var i = 0; i < 26; i++) {
+      g.beginPath();
+      g.ellipse(400, 120 + i * 26, 240 + i * 14, 26 + i * 3, 0, 0, Math.PI * 2);
+      g.stroke();
+    }
+    for (var j = 0; j < leaves; j++) {
+      var x = 90 + ((j * 173) % 620);
+      var y = 110 + ((j * 251) % 400);
+      g.fillStyle = "hsl(" + (hue - 8 + (j % 3) * 6) + ", 40%, " + (30 + (j % 4) * 5) + "%)";
+      g.beginPath();
+      g.ellipse(x, y, 58 + (j % 3) * 12, 40 + (j % 3) * 8, (j % 5) * 0.4, 0, Math.PI * 2);
+      g.fill();
+    }
+    return new Promise(function (resolve) { c.toBlob(resolve, "image/jpeg", 0.8); });
+  }
+
+  function addSamplePhotos(dateAt) {
+    var bid = state.activeBiotopeId;
+    var specs = [
+      { at: 8, hue: 152, leaves: 3, caption: "立ち上げて2週間。まだ底床が見える。（サンプル画像）" },
+      { at: 48, hue: 140, leaves: 9, caption: "水草が茂ってきた。（サンプル画像）" },
+      { at: 86, hue: 128, leaves: 15, caption: "水面がほとんど葉で覆われた。（サンプル画像）" }
+    ];
+
+    Promise.all(specs.map(function (s) {
+      return drawSamplePhoto(s.hue, s.leaves).then(function (blob) {
+        var id = uid();
+        return putPhotoBlob(id, blob).then(function () {
+          return {
+            id: id, biotopeId: bid, date: dateAt(s.at), caption: s.caption,
+            logId: null, w: 800, h: 600, bytes: blob.size
+          };
+        });
+      });
+    })).then(function (records) {
+      state.photos = state.photos.concat(records);
+      save();
+      render();
+      toast("サンプルデータを入れました");
+    }).catch(function () {
+      toast("サンプルデータを入れました（写真は作れませんでした）");
+    });
   }
 
   /* --- 操作 ---------------------------------------------------------------- */
@@ -861,8 +1140,9 @@
       ui.range = r === "all" ? "all" : Number(r);
       render();
     } else if (action === "log-type") {
+      /* 描き直すと、入力途中のメモや選んだファイルが消えてしまう */
       ui.logType = el.getAttribute("data-type");
-      render();
+      setPressed("log-type", "data-type", ui.logType);
     } else if (action === "sample") {
       loadSample();
     } else if (action === "history") {
@@ -871,7 +1151,10 @@
       document.getElementById("event-dialog").showModal();
     } else if (action === "event-kind") {
       ui.eventKind = el.getAttribute("data-kind");
-      renderEventDialog();
+      setPressed("event-kind", "data-kind", ui.eventKind);
+      /* 「数え直し」だけは意味が違うので、入力欄の見出しだけ差し替える */
+      var amountLabel = document.getElementById("amount-label");
+      if (amountLabel) amountLabel.textContent = kindOf(ui.eventKind).sign === 0 ? "数えた匹数" : "匹数";
     } else if (action === "del-event") {
       var eid = el.getAttribute("data-id");
       removeWithUndo("増減の記録を削除しました", function () {
@@ -890,8 +1173,28 @@
       });
     } else if (action === "del-log") {
       var lid = el.getAttribute("data-id");
-      removeWithUndo("作業ログを削除しました", function () {
-        state.logs = state.logs.filter(function (l) { return l.id !== lid; });
+      var attached = photosOfLog(lid).length;
+      removeWithUndo(
+        attached ? "作業ログを削除しました（写真は「写真」に残ります）" : "作業ログを削除しました",
+        function () {
+          state.logs = state.logs.filter(function (l) { return l.id !== lid; });
+          /* 写真そのものは消さない。取り消しても画像は戻せないため */
+          state.photos.forEach(function (p) { if (p.logId === lid) p.logId = null; });
+        }
+      );
+    } else if (action === "photo") {
+      ui.photoId = el.getAttribute("data-id");
+      renderPhotoDialog();
+      document.getElementById("photo-dialog").showModal();
+    } else if (action === "del-photo") {
+      var pid = el.getAttribute("data-id");
+      /* 画像は取り消せないので、ここだけは元に戻せない削除 */
+      dropPhotoBlobs([pid]).then(function () {
+        commit(function () {
+          state.photos = state.photos.filter(function (p) { return p.id !== pid; });
+        });
+        document.getElementById("photo-dialog").close();
+        toast("写真を削除しました");
       });
     } else if (action === "add-biotope") {
       document.getElementById("biotope-dialog").showModal();
@@ -952,13 +1255,20 @@
       toast("測定を記録しました");
     } else if (form.id === "log-form") {
       ev.preventDefault();
+      var logId = uid();
+      var logDate = get("date");
+      var picked = form.elements.files.files;
       commit(function () {
         state.logs.push({
-          id: uid(), biotopeId: state.activeBiotopeId,
-          date: get("date"), type: ui.logType, note: get("note")
+          id: logId, biotopeId: state.activeBiotopeId,
+          date: logDate, type: ui.logType, note: get("note")
         });
       });
-      toast(ui.logType + "を記録しました");
+      if (picked.length) addPhotos(picked, { date: logDate, logId: logId });
+      else toast(ui.logType + "を記録しました");
+    } else if (form.id === "photo-form") {
+      ev.preventDefault();
+      addPhotos(form.elements.files.files, { date: get("date"), caption: get("caption") });
     } else if (form.id === "biotope-form") {
       ev.preventDefault();
       var name = get("name") || "名前のないビオトープ";

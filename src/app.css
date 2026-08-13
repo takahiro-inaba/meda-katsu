@@ -306,6 +306,40 @@ tbody tr:hover { background: var(--surface-2); }
 .chip:hover { border-color: var(--ink-2); color: var(--ink); }
 .chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 700; }
 
+/* --- 写真 ---------------------------------------------------------------- */
+.thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+.thumb {
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+  cursor: pointer;
+  aspect-ratio: 4 / 3;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb:hover { border-color: var(--accent); }
+
+.gallery { display: flex; flex-direction: column; gap: 22px; }
+.month { display: block; }
+.month-head {
+  margin: 0;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.04em;
+  color: var(--ink-2);
+  padding-bottom: 6px; border-bottom: 1px solid var(--hairline);
+}
+
+#photo-dialog { max-width: 760px; }
+.lightbox-img {
+  width: 100%; height: auto; max-height: 62vh; object-fit: contain;
+  background: var(--surface-2); border-radius: var(--r-md); display: block;
+}
+
 /* --- グラフ -------------------------------------------------------------- */
 .chart { position: relative; }
 .chart svg { display: block; width: 100%; height: auto; touch-action: none; }
