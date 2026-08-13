@@ -30,6 +30,13 @@ ${js.trim()}
 </script>
 `;
 
+/* ダブルクリックで開ける 1 ファイル版も出す */
+const standalone = html
+  .replace('<link rel="stylesheet" href="src/app.css">', `<style>\n${css.trim()}\n</style>`)
+  .replace('<script src="src/app.js"></script>', `<script>\n${js.trim()}\n</script>`);
+
 await mkdir(resolve(root, "dist"), { recursive: true });
 await writeFile(resolve(root, "dist/artifact.html"), out, "utf8");
-console.log(`dist/artifact.html を書き出しました (${(out.length / 1024).toFixed(1)} KB)`);
+await writeFile(resolve(root, "dist/meda-katsu.html"), standalone, "utf8");
+console.log(`dist/artifact.html (${(out.length / 1024).toFixed(1)} KB)`);
+console.log(`dist/meda-katsu.html (${(standalone.length / 1024).toFixed(1)} KB)`);
