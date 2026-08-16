@@ -5,12 +5,37 @@
 
 ## 使う
 
+**https://takahiro-inaba.github.io/meda-katsu/**
+
+開くだけで使えます。登録も設定もありません。手元で動かすなら、リポジトリの
+`index.html` をブラウザで開いても同じものが動きます（ビルド不要）。
+
 ```
 open index.html      # macOS
 xdg-open index.html  # Linux
 ```
 
-ビルドもインストールも不要です。ブラウザで `index.html` を開けば動きます。
+### ホーム画面に追加する
+
+記録するのはビオトープの前なので、**アプリのように開けて、電波が無くても動く**形にしています。
+
+- Android / PC（Chrome・Edge）— サイドバー、またはスマホではダッシュボードの末尾に出る
+  「ホーム画面に追加」から
+- iPhone / iPad — 共有ボタン →「ホーム画面に追加」（同じボタンから手順が出ます）
+
+追加すると一式がこの端末に控えられ、圏外でも開けます。記録の置き場所は変わらないので、
+ブラウザで書いたものがそのまま出ます。新しい版を出したときは、画面の下に
+「新しい版があります」と出ます（押すまで読み込み直しません。入力中の内容が消えるため）。
+
+### 配り方
+
+`main` に入ると GitHub Actions が `dist/site` を組んで GitHub Pages に出します
+（`.github/workflows/pages.yml`）。**サーバは持ちません。**記録を預からない作りなので、
+置くのは静的なファイルだけで足ります。運用の費用も、預かったデータの責任も発生しません。
+
+ブラウザの外へ持ち出したい人のために、
+[1ファイル版](https://takahiro-inaba.github.io/meda-katsu/meda-katsu.html)（`meda-katsu.html`）も
+同じ場所に置いています。保存してダブルクリックすれば、通信のない環境でも動きます。
 
 ## 見た目
 
@@ -162,7 +187,13 @@ index.html                 画面の骨組み
 src/app.css                デザイントークンとスタイル（ライト既定、暗いのは任意）
 src/icons.js               線画アイコン（24×24・すべて手書き）
 src/app.js                 状態・保存・描画・グラフ・水面（依存ライブラリなし）
+src/web.js                 URLで開いたときだけ効くもの（オフライン・追加・初回の案内）
+service-worker.js          一式を控えて、圏外でも開けるようにする
+manifest.webmanifest       ホーム画面に追加したときの名前・アイコン・開き方
+assets/                    アイコンとリンク用の画像（scripts/build-icons.mjs で生成）
+scripts/build-site.mjs     公開する一式を dist/site に組む
 scripts/build-artifact.mjs 1枚のHTMLにまとめて dist/artifact.html を出力
+.github/workflows/pages.yml main に入ったものを GitHub Pages へ出す
 docs/loop-log.md           要求と決定の履歴
 ```
 
@@ -173,5 +204,14 @@ docs/loop-log.md           要求と決定の履歴
 ## 開発
 
 ```
-node scripts/build-artifact.mjs   # dist/artifact.html を生成
+node scripts/build-site.mjs       # 公開する一式を dist/site に組む
+node scripts/build-artifact.mjs   # dist/artifact.html と1ファイル版を生成
+node scripts/build-icons.mjs      # assets/ のアイコンとリンク用画像を作り直す
 ```
+
+Service Worker は `http(s)` でしか動かないので、オフラインの確認は
+`npx serve dist/site` のように配って行います（`file://` では登録されません）。
+
+アイコンの生成にだけ Playwright を使います（`npm i -D playwright`）。書き出した PNG は
+リポジトリに置いてあるので、絵を変えるとき以外は動かす必要はありません。生成環境の
+フォントやレンダラの差でアイコンが静かに変わるのを避けるためです。

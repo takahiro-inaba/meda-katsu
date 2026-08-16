@@ -1,0 +1,46 @@
+# main に入ったものを GitHub Pages へ出す。
+# サーバは持たない（記録を預からない作りなので、置き場所は静的なファイルだけでいい）。
+name: pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同じ版を二重に出さない。走っている途中のものは止めずに終わらせる
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 公開するファイルを組む
+        run: node scripts/build-site.mjs
+      - uses: actions/configure-pages@v5
+        with:
+          # 初回はここで Pages 自体を有効にする（設定画面を触らずに公開できる）
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

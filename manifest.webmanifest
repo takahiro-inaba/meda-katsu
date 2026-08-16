@@ -1,0 +1,20 @@
+{
+  "name": "メダ活 — ビオトープ台帳",
+  "short_name": "メダ活",
+  "description": "メダカやドジョウのいるビオトープを記録する台帳。生き物・水温・作業・写真を残すと、記録から気づきが出ます。記録はこのブラウザの中にだけ保存され、どこへも送信しません。",
+  "lang": "ja",
+  "dir": "ltr",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f6f2",
+  "theme_color": "#f4f6f2",
+  "categories": ["lifestyle", "utilities", "productivity"],
+  "icons": [
+    { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
