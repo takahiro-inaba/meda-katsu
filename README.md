@@ -33,6 +33,13 @@ xdg-open index.html  # Linux
 （`.github/workflows/pages.yml`）。**サーバは持ちません。**記録を預からない作りなので、
 置くのは静的なファイルだけで足ります。運用の費用も、預かったデータの責任も発生しません。
 
+はじめに一度だけ、リポジトリの **Settings → Pages → Build and deployment → Source** を
+**「GitHub Actions」**にしてください。ここが未設定だと、ワークフローは
+`Create Pages site failed. Resource not accessible by integration` で止まります。
+Pages を作る API は管理者の権限を要求するもので、ワークフローの `GITHUB_TOKEN` には
+渡せないため、この 1 手だけは自動化できません（設定後は Actions から
+`pages` を再実行するか、`main` に何か入れれば公開されます）。
+
 ブラウザの外へ持ち出したい人のために、
 [1ファイル版](https://takahiro-inaba.github.io/meda-katsu/meda-katsu.html)（`meda-katsu.html`）も
 同じ場所に置いています。保存してダブルクリックすれば、通信のない環境でも動きます。

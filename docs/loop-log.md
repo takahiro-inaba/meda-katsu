@@ -725,6 +725,21 @@ main.innerHTML = storageNoticeHTML() +
 | 1ファイル版（`file://`） | 動く・説明も追加ボタンも出ない・404 なし |
 | PC / スマホでのエラー | どちらも 0 件 |
 
+### 公開して分かったこと
+
+**Pages を有効にするところだけは自動化できなかった。** 設定画面を触らずに済ませようと
+`configure-pages` に `enablement: true` を付けたが、`main` に入った初回のビルドが
+`Create Pages site failed. Resource not accessible by integration` で落ちた。
+
+Pages を作る API は**リポジトリの管理権限**を要求する。ワークフローの `GITHUB_TOKEN` に
+渡せるのは `pages: write` までで、これは「公開する」権限であって「公開先を作る」権限では
+ない。組んだファイルを出すところまでは通っていて（`dist/site` は出来ていた）、
+止まったのは置き場所を作る一手だけだった。
+
+指定を外し、**一度きりの手作業として README に書いた**（Settings → Pages → Source を
+「GitHub Actions」にする）。自動化できないものを自動化したことにして黙って失敗するより、
+1 行の手順として残すほうがいい。
+
 ### 積み残し（更新）
 
 - **記録を後から直せない。** 打ち間違えたら消して入れ直すしかない。
