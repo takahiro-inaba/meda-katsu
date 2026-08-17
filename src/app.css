@@ -502,8 +502,54 @@ dialog::backdrop { background: rgba(9, 14, 11, 0.44); }
 #summary-dialog { max-width: 680px; }
 #event-dialog .dialog-body { max-height: min(82vh, 760px); overflow-y: auto; }
 
+/* ---------------------------------------------------------------------------
+   公開したページでだけ出るもの（src/web.js）
+   1ファイル版には web.js が入らないので、印が付かず何も出ない。
+--------------------------------------------------------------------------- */
+
+/* ホーム画面に追加できると分かるまで隠す。出せない環境で押させないため */
+.install-entry { display: none; }
+:root[data-installable] .install-entry { display: inline-flex; }
+
+/* 新しい版の知らせ。入力中に勝手に読み込み直さず、押してもらう */
+.update-bar {
+  /*
+   * left:50% だけで中央に寄せると、置ける幅が画面の右半分になる。
+   * スマホでは 195px しか無く、文字もボタンも縦に折り返してしまう。
+   * 左右を 0 にして margin で寄せると、画面いっぱいまで使える。
+   */
+  position: fixed; left: 0; right: 0; bottom: 28px;
+  width: max-content; max-width: calc(100vw - 24px); margin-inline: auto;
+  z-index: 21; /* トーストより上。どちらも出たときは知らせを優先する */
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-2);
+  font-size: 13px;
+}
+
+/* 知らせとトーストは同じ場所に出る。重なったらトーストを上へ逃がす */
+body:has(.update-bar) .toast { bottom: 84px; }
+
+#welcome-dialog .dialog-body { gap: 14px; padding: 20px; }
+.welcome-brand { display: flex; align-items: center; gap: 12px; }
+.welcome-brand svg { display: block; color: var(--accent); flex: none; }
+.welcome-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; }
+.welcome-list li {
+  font-size: 13px; line-height: 1.75; color: var(--ink-2);
+  padding-left: 12px; border-left: 2px solid var(--accent-soft);
+}
+.welcome-list strong { display: block; color: var(--ink); font-size: 14px; }
+
+.howto { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; line-height: 1.7; color: var(--ink-2); }
+.howto strong { color: var(--ink); }
+
+/* 中央寄せは .update-bar と同じ理由で margin による（left:50% だと半分しか使えない） */
 .toast {
-  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+  position: fixed; left: 0; right: 0; bottom: 28px;
+  width: max-content; max-width: calc(100vw - 24px); margin-inline: auto;
   background: var(--ink); color: var(--plane);
   padding: 9px 18px; border-radius: 999px; font-size: 13px; font-weight: 500;
   box-shadow: var(--shadow-2); z-index: 20;
@@ -511,7 +557,7 @@ dialog::backdrop { background: rgba(9, 14, 11, 0.44); }
 
 @media (prefers-reduced-motion: no-preference) {
   .toast { animation: toast-in 160ms ease-out; }
-  @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
 }
 
 /* ---------------------------------------------------------------------------

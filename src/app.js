@@ -992,6 +992,9 @@
 
       /* 狭い画面では固定ヘッダーに置ききれないので、ここに出す */
       '<div class="only-mobile">' +
+      /* ホーム画面に追加するのはスマホなので、届く場所に置く（追加できるときだけ出る） */
+      '<button class="btn ghost install-entry" data-action="install" style="width:100%; margin-bottom:8px">' +
+      "ホーム画面に追加する</button>" +
       '<div class="row" style="gap:8px">' +
       '<button class="btn ghost grow" data-action="theme">' + (currentTheme() === "dark" ? "明るくする" : "暗くする") + "</button>" +
       '<button class="btn ghost grow" data-action="backup">バックアップ / 復元</button></div>' +
@@ -2298,6 +2301,12 @@
       setPressed("log-type", "data-type", ui.logType);
     } else if (action === "sample") {
       loadSample();
+    } else if (action === "install") {
+      /*
+       * ホーム画面への追加は src/web.js が持つ（公開したページでだけ効く）。
+       * 1ファイル版には web.js を入れないので、そのときはボタン自体が出ない。
+       */
+      if (window.medaInstall) window.medaInstall();
     } else if (action === "history") {
       ui.eventCreatureId = el.getAttribute("data-id");
       renderEventDialog();

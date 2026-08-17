@@ -3,11 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="メダカやドジョウのいるビオトープを記録する台帳。記録はブラウザの中にだけ保存され、どこへも送信しません。">
+<meta name="description" content="メダカやドジョウのいるビオトープを記録する台帳。生き物・水温・作業・写真を残すと、記録から気づきが出ます。記録はブラウザの中にだけ保存され、どこへも送信しません。">
 <!-- 明るさは既定のライトに合わせる。OS のダーク設定には追従しない方針なので、
      prefers-color-scheme で出し分けない -->
 <meta name="theme-color" content="#f4f6f2">
 <title>メダ活 ビオトープ台帳</title>
+
+<!-- 公開したページとして配るためのもの。file:// で開く1ファイル版では
+     ビルド時に外す（manifest も Service Worker も http(s) でしか効かない） -->
+<link rel="canonical" href="https://takahiro-inaba.github.io/meda-katsu/">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="メダ活">
+
+<!-- リンクを貼られたときに出るもの。何の道具かと、記録がどこへ行くかを先に見せる -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="メダ活">
+<meta property="og:locale" content="ja_JP">
+<meta property="og:title" content="メダ活 — ビオトープ台帳">
+<meta property="og:description" content="生き物・水温・作業・写真を残すと、記録から気づきが出ます。登録も通信もなく、記録はこのブラウザの中だけ。">
+<meta property="og:url" content="https://takahiro-inaba.github.io/meda-katsu/">
+<meta property="og:image" content="https://takahiro-inaba.github.io/meda-katsu/assets/ogp.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="メダ活 ビオトープ台帳">
+<meta name="twitter:card" content="summary_large_image">
 <!-- ブランドの雫。外部ファイルにすると file:// と1ファイル版で読めなくなる -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20viewBox=%220%200%2024%2024%22%20fill=%22none%22%20stroke=%22%232c6b53%22%20stroke-width=%221.8%22%20stroke-linecap=%22round%22%20stroke-linejoin=%22round%22%3E%3Cpath%20d=%22M12%202.5c3.4%204%205.2%206.8%205.2%209.1A5.2%205.2%200%200%201%2012%2016.8a5.2%205.2%200%200%201-5.2-5.2c0-2.3%201.8-5.1%205.2-9.1Z%22/%3E%3Cpath%20d=%22M2.6%2019.4c1.6%200%201.6%201.5%203.1%201.5s1.6-1.5%203.1-1.5%201.6%201.5%203.2%201.5%201.6-1.5%203.1-1.5%201.6%201.5%203.1%201.5%201.6-1.5%203.2-1.5%22/%3E%3C/svg%3E">
 <link rel="stylesheet" href="src/app.css">
@@ -42,6 +65,8 @@
     </nav>
 
     <div class="sidebar-foot">
+      <!-- ホーム画面に追加できると分かったときだけ出る（src/web.js が印を付ける） -->
+      <button class="btn ghost sm install-entry" data-action="install">ホーム画面に追加</button>
       <button class="btn ghost sm" data-action="theme" id="theme-toggle">暗くする</button>
       <button class="btn ghost sm" data-action="backup">バックアップ / 復元</button>
       <p class="muted" style="font-size:11px; margin:4px 0 0; line-height:1.5">
@@ -95,5 +120,6 @@
 
 <script src="src/icons.js"></script>
 <script src="src/app.js"></script>
+<script src="src/web.js"></script>
 </body>
 </html>

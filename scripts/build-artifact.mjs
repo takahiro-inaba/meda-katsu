@@ -18,7 +18,7 @@ const js = await read("src/app.js");
 const title = html.match(/<title>([\s\S]*?)<\/title>/)[1].trim();
 const body = html
   .match(/<body>([\s\S]*)<\/body>/)[1]
-  .replace(/\s*<script src="src\/(icons|app)\.js"><\/script>\s*/g, "\n")
+  .replace(/\s*<script src="src\/(icons|app|web)\.js"><\/script>\s*/g, "\n")
   .trim();
 
 const out = `<title>${title}</title>
@@ -32,8 +32,16 @@ ${js.trim()}
 </script>
 `;
 
-/* ダブルクリックで開ける 1 ファイル版も出す */
+/*
+ * ダブルクリックで開ける 1 ファイル版も出す。
+ * 公開したページ向けのもの（manifest・アイコンの参照・src/web.js）は外す。
+ * file:// では Service Worker が動かず、参照先のファイルも隣に無いため、
+ * 残すと 404 を出すだけになる。
+ */
 const standalone = html
+  .replace(/[ \t]*<link rel="manifest"[^>]*>\n/, "")
+  .replace(/[ \t]*<link rel="apple-touch-icon"[^>]*>\n/, "")
+  .replace(/[ \t]*<script src="src\/web\.js"><\/script>\n/, "")
   .replace('<link rel="stylesheet" href="src/app.css">', `<style>\n${css.trim()}\n</style>`)
   .replace('<script src="src/icons.js"></script>', `<script>\n${icons.trim()}\n</script>`)
   .replace('<script src="src/app.js"></script>', `<script>\n${js.trim()}\n</script>`);
